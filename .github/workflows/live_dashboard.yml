@@ -1,0 +1,110 @@
+name: 🚀 Live Interactive Dashboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: 'Время работы дашборда (в минутах)'
+        required: true
+        default: '60'
+        type: choice
+        options:
+          - '30'
+          - '60'
+          - '120'
+          - '180'
+          - '360'
+
+jobs:
+  run-dashboard:
+    name: 🌐 Запуск онлайн-дашборда
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Проверка репозитория
+        uses: actions/checkout@v4
+
+      - name: 🐍 Настройка Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🛡️ Установка Cloudflare Tunnel (cloudflared)
+        run: |
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+          rm cloudflared.deb
+
+      - name: 🚀 Запуск сервера и создание публичного туннеля
+        id: start_server
+        env:
+          PORT: 8000
+          HOST: 0.0.0.0
+          DURATION: ${{ github.event.inputs.duration_minutes }}
+        run: |
+          echo "Starting FastAPI Vacation Planner server..."
+          python run_server.py &
+          SERVER_PID=$!
+
+          # Wait for server to respond locally
+          for i in {1..30}; do
+            if curl -s http://localhost:8000/ > /dev/null; then
+              echo "Server is UP and running!"
+              break
+            fi
+            sleep 1
+          done
+
+          echo "Starting Cloudflare Quick Tunnel..."
+          cloudflared tunnel --url http://localhost:8000 --no-autoupdate > tunnel.log 2>&1 &
+          TUNNEL_PID=$!
+
+          # Wait for tunnel URL
+          TUNNEL_URL=""
+          for i in {1..40}; do
+            TUNNEL_URL=$(grep -o -E "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -n 1 || true)
+            if [ -n "$TUNNEL_URL" ]; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "Failed to retrieve Cloudflare Tunnel URL. Tunnel log:"
+            cat tunnel.log
+            exit 1
+          fi
+
+          echo "================================================================"
+          echo "🎉 Дашборд успешно запущен онлайн!"
+          echo "🔗 Ссылка: $TUNNEL_URL"
+          echo "================================================================"
+
+          # Output to GitHub Job Summary
+          echo "# 🚀 Планировщик отпусков (Швейное производство)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Ваша публичная ссылка на интерактивный дашборд:" >> $GITHUB_STEP_SUMMARY
+          echo "## [👉 Нажмите здесь, чтобы открыть дашборд]($TUNNEL_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Прямой URL: \`$TUNNEL_URL\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "* ⏱️ **Время активности сессии:** $DURATION минут" >> $GITHUB_STEP_SUMMARY
+          echo "* 🏭 **Доступные разделы:** Календарь-Гант (2026/2027), Реестр сотрудниц, Смены и Квоты, Правила несовместимости, Симулятор бота MAX" >> $GITHUB_STEP_SUMMARY
+          echo "* 📊 **Экспорт:** Выгрузка формы Т-7 (Excel/CSV)" >> $GITHUB_STEP_SUMMARY
+          echo "* 🔒 **Безопасность:** Защищенное HTTPS-соединение через Cloudflare Quick Tunnel" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 💡 *Сессия завершится автоматически через $DURATION минут или при нажатии кнопки «Cancel run» в GitHub Actions.*" >> $GITHUB_STEP_SUMMARY
+
+          echo "Waiting for ${DURATION} minutes before stopping..."
+          sleep $(($DURATION * 60))
+
+          echo "Session time reached. Terminating server and tunnel..."
+          kill $SERVER_PID || true
+          kill $TUNNEL_PID || true

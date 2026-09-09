@@ -1,0 +1,74 @@
+/* Custom Application Styles */
+[v-cloak] {
+    display: none !important;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.6);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(79, 70, 229, 0.4);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(79, 70, 229, 0.7);
+}
+
+/* Slot status styling */
+.slot-approved {
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+    border: 1px solid #34d399;
+    color: #ffffff;
+}
+
+.slot-requested {
+    background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);
+    border: 1px solid #fbbf24;
+    color: #ffffff;
+}
+
+.slot-conflict {
+    background: linear-gradient(135deg, #dc2626 0%, #f43f5e 100%);
+    border: 1px solid #fda4af;
+    color: #ffffff;
+    animation: pulse 2s infinite;
+}
+
+.slot-revised {
+    background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+    border: 1px solid #a5b4fc;
+    color: #ffffff;
+}
+
+/* Badge status */
+.badge-approved {
+    background-color: rgba(16, 185, 129, 0.15);
+    border-color: rgba(16, 185, 129, 0.3);
+    color: #34d399;
+}
+
+.badge-pending {
+    background-color: rgba(245, 158, 11, 0.15);
+    border-color: rgba(245, 158, 11, 0.3);
+    color: #fbbf24;
+}
+
+.badge-conflict {
+    background-color: rgba(244, 63, 94, 0.15);
+    border-color: rgba(244, 63, 94, 0.3);
+    color: #fda4af;
+}
+
+.badge-not-submitted {
+    background-color: rgba(100, 116, 139, 0.15);
+    border-color: rgba(100, 116, 139, 0.3);
+    color: #94a3b8;
+}

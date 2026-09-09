@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  vacation-planner:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: vacation_planner_app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - MAX_BOT_TOKEN=${MAX_BOT_TOKEN}
+      - MAX_API_URL=${MAX_API_URL:-https://api.max.ru/bot/v1}
+    volumes:
+      - ../vacations.db:/app/vacations.db

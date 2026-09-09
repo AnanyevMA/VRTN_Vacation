@@ -1,0 +1,31 @@
+name: 🧪 Automated Tests (CI)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    name: 🧪 Pytest Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Проверка репозитория
+        uses: actions/checkout@v4
+
+      - name: 🐍 Настройка Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🏃 Запуск тестов pytest
+        run: |
+          pytest -v
