@@ -5,14 +5,36 @@
 
 ---
 
-## 🌐 Мгновенный онлайн-доступ к дашборду (GitHub Actions)
-В репозитории настроен автоматический экшн **`Live Interactive Dashboard`**, позволяющий запустить веб-панель в облаке без локальной установки и получить защищенную публичную HTTPS-ссылку (Cloudflare Quick Tunnel):
+## 🌐 Онлайн-доступ к дашборду (24/7 или по требованию)
 
+Для отладки и демонстрации проекта доступны 3 удобных варианта:
+
+### Вариант 1: Постоянный бесплатный онлайн-сервер 24/7 (Render.com)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/AnanyevMA/VRTN_Vacation)
+
+Проект полностью настроен для бесплатного облачного хостинга через `render.yaml`:
+1. Нажмите кнопку **[Deploy to Render](https://render.com/deploy?repo=https://github.com/AnanyevMA/VRTN_Vacation)** (или авторизуйтесь на [Render.com](https://render.com) через GitHub и выберите репозиторий `AnanyevMA/VRTN_Vacation`).
+2. Нажмите **Apply** — сервис соберется за 1 минуту и предоставит **постоянный HTTPS-адрес** (например, `https://vrtn-vacation-planner.onrender.com`).
+3. Сервер работает 24/7 (в бесплатном тарифе при отсутствии обращений он засыпает и моментально просыпается при переходе по ссылке), не требует оплаты и автоматически обновляется при каждом коммите в ветку `main`!
+
+---
+
+### Вариант 2: Запуск 24/7 на собственном VPS (Docker)
+Если у вас есть собственный VPS-сервер (Ubuntu/Debian), запустите дашборд одной командой:
+```bash
+git clone https://github.com/AnanyevMA/VRTN_Vacation.git
+cd VRTN_Vacation
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+Дашборд будет доступен 24/7 по адресу `http://<IP-вашего-VPS>:8000` с автоматическим перезапуском при перезагрузке сервера.
+
+---
+
+### Вариант 3: Быстрый запуск на 6 часов без регистрации (GitHub Actions)
+В репозитории настроен экшн **`Live Interactive Dashboard`** (Cloudflare Quick Tunnel):
 1. Перейдите во вкладку [**Actions**](https://github.com/AnanyevMA/VRTN_Vacation/actions).
-2. Выберите workflow **🚀 Live Interactive Dashboard**.
-3. Нажмите **Run workflow**, выберите желаемую продолжительность сессии (30, 60, 120, 180 мин) и нажмите зеленую кнопку **Run workflow**.
-4. После запуска откройте шаг задачи — в **Step Summary** появится прямая кликабельная ссылка вида `https://xxxx.trycloudflare.com`.
-5. Перейдите по ссылке и управляйте графиком, тестируйте симулятор мессенджера MAX и выгружайте форму Т-7!
+2. Выберите workflow **🚀 Live Interactive Dashboard** и нажмите **Run workflow** (по умолчанию сессия длится **360 минут / 6 часов** — максимальный лимит GitHub Actions).
+3. Через 20 секунд в **Step Summary** появится временная ссылка `https://xxxx.trycloudflare.com`.
 
 ---
 
