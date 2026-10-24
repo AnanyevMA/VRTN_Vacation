@@ -1,6 +1,6 @@
 from typing import List, Optional, Any, Dict
 from datetime import date, datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # --- Department Schemas ---
@@ -33,7 +33,7 @@ class JobRoleBase(BaseModel):
     name: str
     department_id: Optional[int] = None
     description: Optional[str] = None
-    default_quota: int = 1
+    default_quota: int = Field(default=1, ge=0, le=50)
     is_critical: bool = True
 
 
@@ -45,7 +45,7 @@ class JobRoleUpdate(BaseModel):
     name: Optional[str] = None
     department_id: Optional[int] = None
     description: Optional[str] = None
-    default_quota: Optional[int] = None
+    default_quota: Optional[int] = Field(default=None, ge=0, le=50)
     is_critical: Optional[bool] = None
 
 
@@ -60,7 +60,7 @@ class WorkShiftBase(BaseModel):
     name: str
     code: Optional[str] = None
     description: Optional[str] = None
-    default_quota: int = 2
+    default_quota: int = Field(default=2, ge=0, le=50)
     is_active: bool = True
 
 
@@ -72,7 +72,7 @@ class WorkShiftUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
     description: Optional[str] = None
-    default_quota: Optional[int] = None
+    default_quota: Optional[int] = Field(default=None, ge=0, le=50)
     is_active: Optional[bool] = None
 
 
@@ -108,10 +108,11 @@ class EmployeeBase(BaseModel):
     department_id: int
     shift: str = "Смена 1 (дневная 07:00-15:30)"
     region: str = "Республика Хакасия"
-    total_vacation_days: int = 36
+    total_vacation_days: int = Field(default=36, ge=1, le=120)
     seniority_years: int = 1
     social_priority: str = "NONE"
     bot_access: str = "APPROVED"  # 'APPROVED', 'PENDING', 'BLOCKED'
+    consent_152fz: bool = False
     is_active: bool = True
 
 
@@ -127,10 +128,11 @@ class EmployeeUpdate(BaseModel):
     department_id: Optional[int] = None
     shift: Optional[str] = None
     region: Optional[str] = None
-    total_vacation_days: Optional[int] = None
+    total_vacation_days: Optional[int] = Field(default=None, ge=1, le=120)
     seniority_years: Optional[int] = None
     social_priority: Optional[str] = None
     bot_access: Optional[str] = None
+    consent_152fz: Optional[bool] = None
     is_active: Optional[bool] = None
 
 
@@ -215,6 +217,16 @@ class ScheduleRuleBase(BaseModel):
     parameters: Dict[str, Any]
     description: Optional[str] = None
     is_active: bool = True
+    window_search_days: Optional[int] = Field(default=None, ge=1, le=90)
+
+    @field_validator("parameters", mode="before")
+    @classmethod
+    def validate_rule_parameters(cls, v):
+        if isinstance(v, dict) and "window_search_days" in v:
+            val = v["window_search_days"]
+            if not isinstance(val, (int, float)) or val < 1 or val > 90:
+                raise ValueError("window_search_days must be between 1 and 90")
+        return v
 
 
 class ScheduleRuleCreate(ScheduleRuleBase):
@@ -226,6 +238,16 @@ class ScheduleRuleUpdate(BaseModel):
     parameters: Optional[Dict[str, Any]] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
+    window_search_days: Optional[int] = Field(default=None, ge=1, le=90)
+
+    @field_validator("parameters", mode="before")
+    @classmethod
+    def validate_rule_parameters(cls, v):
+        if isinstance(v, dict) and "window_search_days" in v:
+            val = v["window_search_days"]
+            if not isinstance(val, (int, float)) or val < 1 or val > 90:
+                raise ValueError("window_search_days must be between 1 and 90")
+        return v
 
 
 class ScheduleRuleOut(ScheduleRuleBase):
@@ -269,7 +291,7 @@ class AlternativeOption(BaseModel):
 class OptimizeVacationRequest(BaseModel):
     employee_id: int
     requested_slots: List[DateSlot]
-    window_search_days: int = 45
+    window_search_days: int = Field(default=45, ge=1, le=90)
 
 
 class OptimizeVacationResponse(BaseModel):
@@ -298,7 +320,7 @@ class UpdateRulesAndRosterResponse(BaseModel):
 # --- Chat & Messenger Webhook Schemas ---
 class ChatMessageIn(BaseModel):
     employee_id: int
-    message: str
+    message: str = Field(..., max_length=500)
     max_user_id: Optional[str] = None
 
 
@@ -319,3 +341,4 @@ class MaxWebhookPayload(BaseModel):
     phone: Optional[str] = None
     text: Optional[str] = None
     callback_data: Optional[str] = None
+    chat_id: Optional[str] = None

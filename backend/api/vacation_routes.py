@@ -13,6 +13,7 @@ from backend.schemas import (
 )
 from backend.agents.solver_agent import SolverAgent
 from backend.solver.optimizer import VacationOptimizer
+from backend.auth import require_admin
 
 router = APIRouter(prefix="/api/vacations", tags=["Vacation Slots & Scheduling"])
 
@@ -87,14 +88,14 @@ def run_optimizer_tool(req: OptimizeVacationRequest, db: Session = Depends(get_d
     return OptimizeVacationResponse(**result)
 
 
-@router.post("/batch-approve")
+@router.post("/batch-approve", dependencies=[Depends(require_admin)])
 def batch_approve_vacations(year: Optional[int] = None, db: Session = Depends(get_db)):
     optimizer = VacationOptimizer(db)
     result = optimizer.batch_optimize_all_pending(year=year)
     return result
 
 
-@router.put("/{slot_id}/status")
+@router.put("/{slot_id}/status", dependencies=[Depends(require_admin)])
 def update_slot_status(slot_id: int, status: str, db: Session = Depends(get_db)):
     slot = db.query(VacationSlot).filter(VacationSlot.id == slot_id).first()
     if not slot:
@@ -111,7 +112,7 @@ def update_slot_status(slot_id: int, status: str, db: Session = Depends(get_db))
     return {"message": f"Статус слота изменен на {status}"}
 
 
-@router.delete("/{slot_id}")
+@router.delete("/{slot_id}", dependencies=[Depends(require_admin)])
 def delete_slot(slot_id: int, db: Session = Depends(get_db)):
     slot = db.query(VacationSlot).filter(VacationSlot.id == slot_id).first()
     if not slot:

@@ -59,6 +59,90 @@ const app = createApp({
             social_priority: 'NONE',
         });
 
+        // Admin Auth State (R2)
+        const adminToken = ref(localStorage.getItem('vacation_admin_token') || '');
+        const showAdminModal = ref(false);
+        const adminTokenInput = ref(adminToken.value);
+        const adminAuthError = ref('');
+
+        const saveAdminToken = (token) => {
+            const cleanToken = (token !== undefined ? token : adminTokenInput.value || '').trim();
+            adminToken.value = cleanToken;
+            adminTokenInput.value = cleanToken;
+            if (cleanToken) {
+                localStorage.setItem('vacation_admin_token', cleanToken);
+            } else {
+                localStorage.removeItem('vacation_admin_token');
+            }
+            adminAuthError.value = '';
+            showAdminModal.value = false;
+            nextTick(() => {
+                if (window.lucide) window.lucide.createIcons();
+            });
+        };
+
+        const clearAdminToken = () => {
+            adminToken.value = '';
+            adminTokenInput.value = '';
+            localStorage.removeItem('vacation_admin_token');
+            adminAuthError.value = '';
+            nextTick(() => {
+                if (window.lucide) window.lucide.createIcons();
+            });
+        };
+
+        const openAdminModal = (errorMsg = '') => {
+            adminTokenInput.value = adminToken.value;
+            adminAuthError.value = errorMsg;
+            showAdminModal.value = true;
+            nextTick(() => {
+                if (window.lucide) window.lucide.createIcons();
+            });
+        };
+
+        const adminFetch = async (url, options = {}) => {
+            const opts = { ...options };
+            const headers = { ...(opts.headers || {}) };
+            if (adminToken.value) {
+                headers['X-Admin-Token'] = adminToken.value;
+            }
+            opts.headers = headers;
+            const res = await fetch(url, opts);
+            if (res.status === 401) {
+                let detail = 'Требуется авторизация администратора (неверный или отсутствующий ключ)';
+                try {
+                    const errJson = await res.clone().json();
+                    if (errJson.detail) detail = errJson.detail;
+                } catch (_) {}
+                openAdminModal(detail);
+            }
+            return res;
+        };
+        window.adminFetch = adminFetch;
+
+        const downloadExport = async (format) => {
+            try {
+                const res = await adminFetch(`api/export/${format}`);
+                if (!res.ok) {
+                    if (res.status === 401) return;
+                    const err = await res.json().catch(() => ({}));
+                    return alert(err.detail || 'Ошибка при экспорте данных');
+                }
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const filename = format === 'excel' ? `form_t7_vacation_schedule_${selectedYear.value}.xlsx` : `vacation_schedule_${selectedYear.value}.csv`;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+            } catch (err) {
+                console.error('Export download error:', err);
+            }
+        };
+
         // --- Computed ---
         const currentEmployee = computed(() => {
             return employees.value.find(e => e.id === selectedEmployeeId.value) || null;
@@ -80,15 +164,15 @@ const app = createApp({
         const fetchAllData = async () => {
             try {
                 const [empRes, deptRes, rolesRes, shiftsRes, vacRes, rulesRes, statsRes, botAdminsRes, incompRes] = await Promise.all([
-                    fetch('/api/employees').then(r => r.json()),
-                    fetch('/api/departments').then(r => r.json()),
-                    fetch('/api/roles').then(r => r.json()),
-                    fetch('/api/shifts').then(r => r.json()),
-                    fetch(`/api/vacations?year=${selectedYear.value}`).then(r => r.json()),
-                    fetch('/api/rules').then(r => r.json()),
-                    fetch('/api/export/stats').then(r => r.json()),
-                    fetch('/api/bot-admins').then(r => r.json()),
-                    fetch('/api/rules/incompatible-groups').then(r => r.json()),
+                    fetch('api/employees').then(r => r.json()),
+                    fetch('api/departments').then(r => r.json()),
+                    fetch('api/roles').then(r => r.json()),
+                    fetch('api/shifts').then(r => r.json()),
+                    fetch(`api/vacations?year=${selectedYear.value}`).then(r => r.json()),
+                    fetch('api/rules').then(r => r.json()),
+                    fetch('api/export/stats').then(r => r.json()),
+                    fetch('api/bot-admins').then(r => r.json()),
+                    fetch('api/rules/incompatible-groups').then(r => r.json()),
                 ]);
 
                 employees.value = empRes;
@@ -137,28 +221,10 @@ const app = createApp({
         const loadChatHistory = async (empId) => {
             if (!empId) return;
             try {
-                const res = await fetch(`/api/chat/history/${empId}`).then(r => r.json());
+                const res = await fetch(`api/chat/history/${empId}`).then(r => r.json());
                 chatMessages.value = res;
-                if (res.length === 0) {
-                    sendAutoGreeting(empId);
-                }
             } catch (e) {
                 console.error('Error loading chat history:', e);
-            }
-        };
-
-        const sendAutoGreeting = async (empId) => {
-            try {
-                isTyping.value = true;
-                await fetch('/api/chat/message', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ employee_id: empId, message: 'Привет' })
-                });
-                isTyping.value = false;
-                loadChatHistory(empId);
-            } catch (e) {
-                isTyping.value = false;
             }
         };
 
@@ -184,7 +250,7 @@ const app = createApp({
 
             isTyping.value = true;
             try {
-                const res = await fetch('/api/chat/message', {
+                const res = await fetch('api/chat/message', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ employee_id: selectedEmployeeId.value, message: text })
@@ -199,7 +265,10 @@ const app = createApp({
                     payload: res.payload,
                 });
 
-                fetchAllData();
+                // Only reload all dashboard datasets when vacation slots were committed
+                if (res.payload && res.payload.action === 'SUBMISSION_CONFIRMED') {
+                    fetchAllData();
+                }
             } catch (err) {
                 isTyping.value = false;
                 console.error('Error sending message:', err);
@@ -220,9 +289,9 @@ const app = createApp({
 
         const clearChat = async () => {
             if (!selectedEmployeeId.value) return;
-            await fetch(`/api/chat/reset/${selectedEmployeeId.value}`, { method: 'POST' });
+            await fetch(`api/chat/reset/${selectedEmployeeId.value}`, { method: 'POST' });
             chatMessages.value = [];
-            sendAutoGreeting(selectedEmployeeId.value);
+            await loadChatHistory(selectedEmployeeId.value);
         };
 
         // --- Slot Actions ---
@@ -231,13 +300,13 @@ const app = createApp({
         };
 
         const updateSlotStatus = async (slotId, status) => {
-            await fetch(`/api/vacations/${slotId}/status?status=${status}`, { method: 'PUT' });
+            await adminFetch(`api/vacations/${slotId}/status?status=${status}`, { method: 'PUT' });
             editingSlot.value = null;
             fetchAllData();
         };
 
         const deleteSlot = async (slotId) => {
-            await fetch(`/api/vacations/${slotId}`, { method: 'DELETE' });
+            await adminFetch(`api/vacations/${slotId}`, { method: 'DELETE' });
             editingSlot.value = null;
             fetchAllData();
         };
@@ -246,7 +315,7 @@ const app = createApp({
         const runBatchApprove = async () => {
             isBatchProcessing.value = true;
             try {
-                const res = await fetch(`/api/vacations/batch-approve?year=${selectedYear.value}`, { method: 'POST' }).then(r => r.json());
+                const res = await adminFetch(`api/vacations/batch-approve?year=${selectedYear.value}`, { method: 'POST' }).then(r => r.json());
                 isBatchProcessing.value = false;
                 fetchAllData();
                 alert(`✅ Пакетная оптимизация на ${selectedYear.value} год завершена!\n\nОдобрено слотов: ${res.approved_count}\nКоллизий выявлено: ${res.conflicts_count}`);
@@ -282,13 +351,13 @@ const app = createApp({
 
         const saveEmployee = async () => {
             if (isEditingEmployee.value) {
-                await fetch(`/api/employees/${empForm.value.id}`, {
+                await adminFetch(`api/employees/${empForm.value.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(empForm.value)
                 });
             } else {
-                await fetch('/api/employees', {
+                await adminFetch('api/employees', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(empForm.value)
@@ -303,7 +372,7 @@ const app = createApp({
         const syncGoogleSheets = async () => {
             isSyncing.value = true;
             try {
-                const res = await fetch('/api/employees/sync-google-sheets', { method: 'POST' }).then(r => r.json());
+                const res = await adminFetch('api/employees/sync-google-sheets', { method: 'POST' }).then(r => r.json());
                 isSyncing.value = false;
                 await fetchAllData();
                 alert(`Синхронизация с Google Таблицей завершена успешно!\n\nВсего работников: ${res.total_imported}\nДобавлено новых: ${res.created}\nОбновлено: ${res.updated}`);
@@ -316,7 +385,7 @@ const app = createApp({
 
         const toggleBotAccess = async (emp, newStatus) => {
             try {
-                await fetch(`/api/employees/${emp.id}/bot-access?status=${newStatus}`, { method: 'PUT' });
+                await adminFetch(`api/employees/${emp.id}/bot-access?status=${newStatus}`, { method: 'PUT' });
                 emp.bot_access = newStatus;
             } catch (err) {
                 console.error('Error toggling bot access:', err);
@@ -326,14 +395,14 @@ const app = createApp({
 
         const deleteEmployee = async (id) => {
             if (confirm('Вы уверены, что хотите удалить сотрудника?')) {
-                await fetch(`/api/employees/${id}`, { method: 'DELETE' });
+                await adminFetch(`api/employees/${id}`, { method: 'DELETE' });
                 fetchAllData();
             }
         };
 
         // --- Rules Actions ---
         const saveRoleQuotas = async () => {
-            await fetch('/api/rules/role-quotas', {
+            await adminFetch('api/rules/role-quotas', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(roleQuotas.value)
@@ -344,7 +413,7 @@ const app = createApp({
 
         const addBlackout = async (newB) => {
             blackoutsList.value.push({ ...newB });
-            await fetch('/api/rules/blackouts', {
+            await adminFetch('api/rules/blackouts', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(blackoutsList.value)
@@ -354,7 +423,7 @@ const app = createApp({
 
         const removeBlackout = async (idx) => {
             blackoutsList.value.splice(idx, 1);
-            await fetch('/api/rules/blackouts', {
+            await adminFetch('api/rules/blackouts', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(blackoutsList.value)
@@ -363,7 +432,7 @@ const app = createApp({
         };
 
         const saveShiftQuotas = async () => {
-            await fetch('/api/rules/shift-quotas', {
+            await adminFetch('api/rules/shift-quotas', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(shiftQuotas.value)
@@ -373,7 +442,7 @@ const app = createApp({
         };
 
         const addIncompatibleGroup = async (groupData) => {
-            const res = await fetch('/api/rules/incompatible-groups', {
+            const res = await adminFetch('api/rules/incompatible-groups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(groupData)
@@ -388,7 +457,7 @@ const app = createApp({
 
         const deleteIncompatibleGroup = async (groupId) => {
             if (!confirm('Удалить эту группу непересечения сотрудников?')) return;
-            const res = await fetch(`/api/rules/incompatible-groups/${groupId}`, { method: 'DELETE' });
+            const res = await adminFetch(`api/rules/incompatible-groups/${groupId}`, { method: 'DELETE' });
             if (!res.ok) {
                 const err = await res.json();
                 return alert(err.detail || 'Ошибка удаления группы');
@@ -419,10 +488,11 @@ const app = createApp({
         onMounted(() => {
             fetchAllData();
             setInterval(() => {
-                fetch('/api/export/stats').then(r => r.json()).then(res => {
+                if (document.hidden) return;
+                fetch('api/export/stats').then(r => r.json()).then(res => {
                     stats.value = res;
                 }).catch(() => {});
-            }, 10000);
+            }, 30000);
         });
 
         return {
@@ -477,6 +547,15 @@ const app = createApp({
             syncGoogleSheets,
             botAdmins,
             toggleBotAccess,
+            adminToken,
+            showAdminModal,
+            adminTokenInput,
+            adminAuthError,
+            saveAdminToken,
+            clearAdminToken,
+            openAdminModal,
+            adminFetch,
+            downloadExport,
         };
     }
 });

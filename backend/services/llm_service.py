@@ -5,144 +5,168 @@ from datetime import date
 from typing import List, Dict, Any, Optional
 import httpx
 
+import re
+
 from backend.solver.nlp_date_parser import parse_russian_vacation_text, calculate_slot_days
 
 logger = logging.getLogger("llm_service")
 
-# Google AI Studio Gemini Flash Free Tier
-DEFAULT_MODEL = "gemini-1.5-flash"
+PHONE_REGEX = re.compile(r"(?<!\d)(?:\+7|8|7)[\s\.\-]*\(?\d{3}\)?(?:[\s\.\-]*\d){7}(?!\d)")
+EMAIL_REGEX = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
+def sanitize_prompt_pii(text: str) -> str:
+    """
+    Strips phone numbers and email addresses to protect employee PII (152-ФЗ)
+    before sending prompts to external LLMs.
+    """
+    if not text:
+        return ""
+    cleaned = PHONE_REGEX.sub("", text)
+    cleaned = EMAIL_REGEX.sub("", cleaned)
+    return re.sub(r"[ \t]+", " ", cleaned).strip()
+
+
+def _ensure_env_loaded():
+    if not os.environ.get("GEMINI_API_KEY"):
+        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env")
+        if os.path.exists(env_path):
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+
+_ensure_env_loaded()
+
+# Single lightweight Google AI Studio model (Free Tier)
+DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
 class GeminiFlashService:
     """
-    Google Gemini Flash Free Tier Service
-    Provides zero-cost intelligent date extraction and polite conversational empathy for garment factory workers.
+    Lightweight Google Gemini Flash-Lite Service.
+    Used strictly as a fallback date/season extractor when deterministic regex finds no dates.
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        _ensure_env_loaded()
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.model = model or os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
+        self._client = httpx.Client(
+            timeout=10.0,
+            limits=httpx.Limits(max_keepalive_connections=2, max_connections=5),
+        )
 
     def is_available(self) -> bool:
         return bool(self.api_key and self.api_key.strip())
 
     def extract_dates(self, text: str, default_year: int = 2026) -> List[Dict[str, Any]]:
+        slots, _ = self.extract_dates_with_context(text, default_year=default_year, remaining_days=36)
+        return slots
+
+    def extract_dates_with_context(
+        self,
+        text: str,
+        default_year: int = 2026,
+        remaining_days: int = 36,
+    ) -> tuple[List[Dict[str, Any]], str]:
         """
         Hybrid Date Extraction:
-        1. First try instant deterministic local regex/parser (0 ms, 100% precision).
-        2. If regex finds nothing and Gemini API key is configured, query Gemini Flash Free Tier.
+        1. Instant deterministic local regex/parser (0 ms, 0 RAM/tokens).
+        2. Single lightweight Google Gemini Flash-Lite fallback for informal/seasonal queries.
         """
+        if not text or not text.strip():
+            return [], ""
+
         # 1. Deterministic First
         fast_slots = parse_russian_vacation_text(text, default_year=default_year)
         if fast_slots:
-            return fast_slots
+            return fast_slots, ""
 
-        # 2. Gemini Flash Fallback (for complex/conversational sentences)
+        # Skip LLM for very short inputs or strings without letters
+        clean = text.strip()
+        if len(clean) < 4 or not any(ch.isalpha() for ch in clean):
+            return [], ""
+
+        # 2. Single lightweight Gemini model fallback
         if not self.is_available():
-            return []
+            return [], ""
 
         try:
-            gemini_slots = self._query_gemini_for_dates(text, default_year=default_year)
-            if gemini_slots:
-                return gemini_slots
+            return self._query_gemini_for_dates(clean, default_year=default_year, remaining_days=remaining_days)
         except Exception as e:
             logger.warning(f"Gemini API fallback error: {e}")
 
-        return []
+        return [], ""
 
-    def _query_gemini_for_dates(self, text: str, default_year: int) -> List[Dict[str, Any]]:
-        url = GEMINI_API_URL.format(model=DEFAULT_MODEL) + f"?key={self.api_key}"
-        prompt = f"""
-Ты — помощник кадровой службы швейной фабрики.
-Текущий год по умолчанию: {default_year}.
-Проанализируй текст сотрудницы швейного цеха и извлеки желаемые интервалы дат отпуска.
-Верни ТОЛЬКО валидный JSON следующего формата:
-{{"slots": [{{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}}]}}
+    @staticmethod
+    def sanitize_prompt_pii(text: str) -> str:
+        return sanitize_prompt_pii(text)
 
-Текст сотрудницы: "{text}"
-Если даты или временные рамки не указаны, верни {{"slots": []}}.
-"""
+    def _query_gemini_for_dates(self, text: str, default_year: int, remaining_days: int = 36) -> tuple[List[Dict[str, Any]], str]:
+        sanitized_text = sanitize_prompt_pii(text)
+        prompt = (
+            f"Извлеки интервалы отпуска на {default_year} год из пожелания сотрудницы (доступно {remaining_days} дн., "
+            f"минимум один блок >=14 дн.). Если указан сезон/погода/курорт, подбери даты в {default_year} г. на {remaining_days} дн. "
+            f"Верни только JSON: {{\"slots\":[{{\"start\":\"YYYY-MM-DD\",\"end\":\"YYYY-MM-DD\"}}],\"comment\":\"до 10 слов\"}}. "
+            f"Если текст не про отпуск: {{\"slots\":[],\"comment\":\"\"}}.\nТекст: \"{sanitized_text}\""
+        )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.1,
-                "responseMimeType": "application/json"
-            }
+                "maxOutputTokens": 160,
+                "responseMimeType": "application/json",
+            },
         }
 
-        with httpx.Client(timeout=8.0) as client:
-            resp = client.post(url, json=payload)
-            if resp.status_code != 200:
-                logger.warning(f"Gemini API status {resp.status_code}: {resp.text[:200]}")
-                return []
+        url = GEMINI_API_URL.format(model=self.model)
+        headers = {"x-goog-api-key": self.api_key}
+        resp = self._client.post(url, json=payload, headers=headers)
+        if resp.status_code != 200:
+            logger.warning(f"Gemini model {self.model} returned status {resp.status_code}")
+            return [], ""
 
-            data = resp.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                return []
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return [], ""
 
-            part_text = candidates[0]["content"]["parts"][0]["text"]
-            parsed = json.loads(part_text)
-            slots_raw = parsed.get("slots", [])
+        parts = candidates[0].get("content", {}).get("parts", [])
+        part_text = "".join(p.get("text", "") for p in parts if "text" in p).strip()
+        if part_text.startswith("```"):
+            part_text = part_text.strip("`")
+            if part_text.startswith("json"):
+                part_text = part_text[4:].strip()
 
-            valid_slots = []
-            for item in slots_raw:
-                try:
-                    s_date = date.fromisoformat(item["start"])
-                    e_date = date.fromisoformat(item["end"])
-                    if e_date >= s_date:
-                        days = calculate_slot_days(s_date, e_date)
-                        valid_slots.append({
-                            "start": s_date,
-                            "end": e_date,
-                            "days": days,
-                        })
-                except Exception:
-                    continue
-            return valid_slots
+        parsed = json.loads(part_text)
+        slots_raw = parsed.get("slots", [])
+        comment = str(parsed.get("comment", "") or "").strip()
 
-    def explain_conflict_politely(
-        self,
-        employee_name: str,
-        role: str,
-        conflict_reason: str,
-        alternatives: List[Dict[str, Any]],
-    ) -> str:
-        """Generates a warm, supportive explanation in Russian if Gemini is configured."""
-        if not self.is_available():
-            return ""
-
-        url = GEMINI_API_URL.format(model=DEFAULT_MODEL) + f"?key={self.api_key}"
-        alt_text = "\n".join(f"- Вариант {a.get('option', i+1)}: {a.get('text', '')}" for i, a in enumerate(alternatives))
-        prompt = f"""
-Напиши короткий, вежливый и поддерживающий ответ от лица виртуального помощника швейной фабрики для сотрудницы {employee_name} ({role}).
-Ситуация: запрошенные даты отпуска совпали с ограничением производства: "{conflict_reason}".
-Предложенные альтернативные свободные периоды:
-{alt_text}
-
-Правила ответа:
-1. Обращайся тепло и уважительно по имени.
-2. Просто и по-человечески объясни, почему на эти даты цех не может отпустить двоих швей одновременно.
-3. Предложи выбрать одну из свободных дат.
-4. Текст должен быть кратким (до 4-5 предложений).
-"""
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.4}
-        }
-
-        try:
-            with httpx.Client(timeout=6.0) as client:
-                resp = client.post(url, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        return candidates[0]["content"]["parts"][0]["text"].strip()
-        except Exception as e:
-            logger.warning(f"Gemini politeness explanation error: {e}")
-        return ""
+        valid_slots = []
+        for item in slots_raw:
+            try:
+                s_date = date.fromisoformat(item["start"])
+                e_date = date.fromisoformat(item["end"])
+                if e_date >= s_date:
+                    days = calculate_slot_days(s_date, e_date)
+                    valid_slots.append({
+                        "start": s_date,
+                        "end": e_date,
+                        "days": days,
+                    })
+            except Exception:
+                continue
+        return valid_slots, comment
 
 
 # Global singleton instance
 llm_service = GeminiFlashService()
+
+

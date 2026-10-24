@@ -13,14 +13,25 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Local Database & Logs
+# Binaries and executables
+cloudflared.exe
+*.exe
+
+# Local Database, Logs & WAL Journals
 *.log
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
+vacations.db*
+data/
 scratch/
 .system_generated/
 .env
 .env.*
+
+# Multi-agent metadata
+.agents/
 
 # OS Specific
 .DS_Store

@@ -28,7 +28,7 @@ window.DeptRolesView = {
         },
         async saveDept() {
             if (!this.deptForm.name.trim()) return alert('Укажите название цеха / отдела');
-            const url = this.isEditing ? `/api/departments/${this.deptForm.id}` : '/api/departments';
+            const url = this.isEditing ? `api/departments/${this.deptForm.id}` : 'api/departments';
             const method = this.isEditing ? 'PUT' : 'POST';
             const res = await fetch(url, {
                 method,
@@ -44,7 +44,7 @@ window.DeptRolesView = {
         },
         async deleteDept(id) {
             if (!confirm('Удалить данный цех / отдел?')) return;
-            const res = await fetch(`/api/departments/${id}`, { method: 'DELETE' });
+            const res = await fetch(`api/departments/${id}`, { method: 'DELETE' });
             if (!res.ok) {
                 const err = await res.json();
                 return alert(err.detail || 'Ошибка удаления');
@@ -65,7 +65,7 @@ window.DeptRolesView = {
         },
         async saveRole() {
             if (!this.roleForm.name.trim()) return alert('Укажите наименование должности');
-            const url = this.isEditing ? `/api/roles/${this.roleForm.id}` : '/api/roles';
+            const url = this.isEditing ? `api/roles/${this.roleForm.id}` : 'api/roles';
             const method = this.isEditing ? 'PUT' : 'POST';
             const res = await fetch(url, {
                 method,
@@ -81,7 +81,7 @@ window.DeptRolesView = {
         },
         async deleteRole(id) {
             if (!confirm('Удалить данную должность?')) return;
-            const res = await fetch(`/api/roles/${id}`, { method: 'DELETE' });
+            const res = await fetch(`api/roles/${id}`, { method: 'DELETE' });
             if (!res.ok) {
                 const err = await res.json();
                 return alert(err.detail || 'Ошибка удаления');
@@ -102,7 +102,7 @@ window.DeptRolesView = {
         },
         async saveShift() {
             if (!this.shiftForm.name.trim()) return alert('Укажите наименование смены');
-            const url = this.isEditing ? `/api/shifts/${this.shiftForm.id}` : '/api/shifts';
+            const url = this.isEditing ? `api/shifts/${this.shiftForm.id}` : 'api/shifts';
             const method = this.isEditing ? 'PUT' : 'POST';
             const res = await fetch(url, {
                 method,
@@ -118,7 +118,7 @@ window.DeptRolesView = {
         },
         async deleteShift(id) {
             if (!confirm('Удалить смену?')) return;
-            const res = await fetch(`/api/shifts/${id}`, { method: 'DELETE' });
+            const res = await fetch(`api/shifts/${id}`, { method: 'DELETE' });
             if (!res.ok) {
                 const err = await res.json();
                 return alert(err.detail || 'Ошибка удаления');
@@ -135,12 +135,13 @@ window.DeptRolesView = {
             if (!this.adminForm.full_name.trim() || !this.adminForm.phone.trim()) {
                 return alert('Заполните ФИО и номер телефона администратора');
             }
-            const res = await fetch('/api/bot-admins', {
+            const res = await (window.adminFetch || fetch)('api/bot-admins', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(this.adminForm)
             });
             if (!res.ok) {
+                if (res.status === 401) return;
                 const err = await res.json();
                 return alert(err.detail || 'Ошибка добавления администратора');
             }
@@ -149,8 +150,9 @@ window.DeptRolesView = {
         },
         async deleteAdmin(id) {
             if (!confirm('Удалить администратора бота?')) return;
-            const res = await fetch(`/api/bot-admins/${id}`, { method: 'DELETE' });
+            const res = await (window.adminFetch || fetch)(`api/bot-admins/${id}`, { method: 'DELETE' });
             if (!res.ok) {
+                if (res.status === 401) return;
                 const err = await res.json();
                 return alert(err.detail || 'Ошибка удаления');
             }

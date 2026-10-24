@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import BotAdmin
 from backend.schemas import BotAdminCreate, BotAdminUpdate, BotAdminOut
+from backend.auth import require_admin
 
 router = APIRouter(prefix="/api/bot-admins", tags=["MAX Bot Administrators"])
 
@@ -15,7 +16,7 @@ def list_bot_admins(db: Session = Depends(get_db)):
     return db.query(BotAdmin).order_by(BotAdmin.id.asc()).all()
 
 
-@router.post("", response_model=BotAdminOut)
+@router.post("", response_model=BotAdminOut, dependencies=[Depends(require_admin)])
 def create_bot_admin(admin_in: BotAdminCreate, db: Session = Depends(get_db)):
     """Registers a new administrator phone number in the system."""
     existing = db.query(BotAdmin).filter(BotAdmin.phone == admin_in.phone.strip()).first()
@@ -36,7 +37,7 @@ def create_bot_admin(admin_in: BotAdminCreate, db: Session = Depends(get_db)):
     return admin
 
 
-@router.put("/{admin_id}", response_model=BotAdminOut)
+@router.put("/{admin_id}", response_model=BotAdminOut, dependencies=[Depends(require_admin)])
 def update_bot_admin(admin_id: int, admin_up: BotAdminUpdate, db: Session = Depends(get_db)):
     admin = db.query(BotAdmin).filter(BotAdmin.id == admin_id).first()
     if not admin:
@@ -60,7 +61,7 @@ def update_bot_admin(admin_id: int, admin_up: BotAdminUpdate, db: Session = Depe
     return admin
 
 
-@router.delete("/{admin_id}")
+@router.delete("/{admin_id}", dependencies=[Depends(require_admin)])
 def delete_bot_admin(admin_id: int, db: Session = Depends(get_db)):
     admin = db.query(BotAdmin).filter(BotAdmin.id == admin_id).first()
     if not admin:

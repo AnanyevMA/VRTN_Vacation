@@ -39,6 +39,7 @@ def agent_test_db():
         region="Республика Хакасия",
         total_vacation_days=36,
         seniority_years=7,
+        consent_152fz=True,
     )
     emp2 = Employee(
         phone="+79002223344",
@@ -50,6 +51,7 @@ def agent_test_db():
         region="Республика Хакасия",
         total_vacation_days=36,
         seniority_years=3,
+        consent_152fz=True,
     )
     db.add_all([emp1, emp2])
     db.commit()
@@ -103,3 +105,33 @@ def test_accumulative_draft_and_confirmation(agent_test_db):
     slots = agent_test_db.query(VacationSlot).filter(VacationSlot.employee_id == emp2.id).all()
     assert len(slots) == 2
     assert sum(s.days_count for s in slots) == 36
+
+
+def test_chat_self_overlap_and_conflict_reentry(agent_test_db):
+    intake_agent = IntakeAgent(agent_test_db)
+    emp2 = agent_test_db.query(Employee).filter(Employee.phone == "+79002223344").first()
+
+    # 1. Start draft with 14 days (1-14 Aug 2027)
+    r1 = intake_agent.process_message(emp2.id, "с 1 по 14 августа 2027")
+    assert r1["payload"]["action"] == "DRAFT_UPDATED"
+
+    # 2. Send overlapping period (10-31 Aug 2027) -> must be rejected as self-overlap
+    r_overlap = intake_agent.process_message(emp2.id, "с 10 по 31 августа 2027")
+    assert r_overlap["payload"]["action"] == "PARSE_ERROR"
+    assert "накладывается" in r_overlap["text"]
+
+    # 3. Send a complete 36-day schedule that conflicts with emp1 (1-14 July 2027)
+    r_conflict = intake_agent.process_message(
+        emp2.id, "Хочу с 1 по 14 июля 2027 и с 1 по 22 сентября 2027"
+    )
+    assert r_conflict["payload"]["action"] == "OFFER_ALTERNATIVES"
+    assert "превышает квоту" in r_conflict["text"]
+
+    # 4. Instead of picking option 1/2/3, send new valid dates starting with '1' -> must NOT trigger option 1!
+    r_new_dates = intake_agent.process_message(
+        emp2.id, "Хочу с 1 по 14 августа 2027 и с 1 по 22 октября 2027"
+    )
+    assert r_new_dates["payload"]["action"] == "AWAITING_CONFIRMATION"
+    assert "01.08.2027 – 14.08.2027" in r_new_dates["text"]
+    assert "01.10.2027 – 22.10.2027" in r_new_dates["text"]
+

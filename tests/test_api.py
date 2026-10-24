@@ -1,3 +1,4 @@
+import re
 import pytest
 from fastapi.testclient import TestClient
 
@@ -99,19 +100,21 @@ def test_api_vacations_with_year():
     assert r_2027.status_code == 200
 
 
-def test_api_sync_google_sheets():
+def test_api_sync_google_sheets(monkeypatch):
+    import backend.google_sheets_importer as gsi
+    monkeypatch.setattr(gsi, "fetch_csv_from_google_sheet", lambda gid, timeout=10.0: None)
+
     r = client.post("/api/employees/sync-google-sheets")
     assert r.status_code == 200
     data = r.json()
     assert data["success"] is True
     assert data["total_imported"] >= 14
-    assert "Анохина Марина" in data["workers"]
-    assert "Артамонова Наталья" in data["workers"]
+    assert "Швея цеха 1 (Анна И.)" in data["workers"]
 
-    # Verify employees list returns the real workers
+    # Verify employees list returns the synthetic workers
     emps = client.get("/api/employees").json()
     names = [e["full_name"] for e in emps]
-    assert "Анохина Марина" in names
+    assert "Швея цеха 1 (Анна И.)" in names
     assert "Иванова Татьяна Сергеевна" not in names
 
 
@@ -186,10 +189,25 @@ def test_webhook_access_control():
     assert r_unknown.status_code == 200
     assert "не найден в базе" in r_unknown.json()["text"]
 
-    # 2. Known employee phone sends contact -> authenticated
+    # 2. Known employee phone sends verified native contact -> authenticated
     r_auth = client.post("/api/chat/webhook", json={
-        "user_id": test_user_id,
-        "phone": target_emp["phone"],
+        "update_type": "message_created",
+        "message": {
+            "sender": {"user_id": test_user_id},
+            "body": {
+                "attachments": [
+                    {
+                        "type": "contact",
+                        "payload": {
+                            "tam_info": {
+                                "user_id": test_user_id,
+                                "phone": target_emp["phone"],
+                            }
+                        }
+                    }
+                ]
+            }
+        }
     })
     assert r_auth.status_code == 200
     first_name = target_emp["full_name"].split()[1] if len(target_emp["full_name"].split()) > 1 else target_emp["full_name"]
@@ -223,16 +241,32 @@ def test_webhook_access_control():
     assert len(r_approved_msg.json()["text"]) > 0
 
     # 6. Admin command test
-    client.post("/api/bot-admins", json={
+    r_adm_create = client.post("/api/bot-admins", json={
         "phone": "+79112223344",
         "full_name": "Админ Цеха",
         "role_title": "Руководитель",
         "notify_on_new_request": True,
     })
-    # Admin sends phone to authenticate
+    adm_id = r_adm_create.json().get("id")
+    # Admin sends verified native contact to authenticate
     client.post("/api/chat/webhook", json={
-        "user_id": "admin_max_99",
-        "phone": "+79112223344",
+        "update_type": "message_created",
+        "message": {
+            "sender": {"user_id": "admin_max_99"},
+            "body": {
+                "attachments": [
+                    {
+                        "type": "contact",
+                        "payload": {
+                            "tam_info": {
+                                "user_id": "admin_max_99",
+                                "phone": "+79112223344",
+                            }
+                        }
+                    }
+                ]
+            }
+        }
     })
     # Admin sends /admin
     r_adm_cmd = client.post("/api/chat/webhook", json={
@@ -241,6 +275,124 @@ def test_webhook_access_control():
     })
     assert r_adm_cmd.status_code == 200
     assert "Панель администратора MAX" in r_adm_cmd.json()["text"]
+    if adm_id:
+        client.delete(f"/api/bot-admins/{adm_id}")
+
+
+
+def test_webhook_contact_vcf_and_text_authentication():
+    emps = client.get("/api/employees").json()
+    emp = emps[1]
+    phone_raw = emp["phone"]
+    user_id_vcf = f"9900{emp['id']}"
+
+    # 1. MAX contact attachment with vcf_info in message.body.attachments
+    vcard_str = f"BEGIN:VCARD\r\nVERSION:3.0\r\nFN:{emp['full_name']}\r\nTEL;TYPE=CELL:{phone_raw}\r\nEND:VCARD"
+    r_vcf = client.post("/api/chat/webhook", json={
+        "update_type": "message_created",
+        "message": {
+            "sender": {"user_id": user_id_vcf, "name": emp["full_name"]},
+            "body": {
+                "attachments": [
+                    {
+                        "type": "contact",
+                        "payload": {
+                            "vcf_info": vcard_str,
+                        }
+                    }
+                ]
+            }
+        }
+    })
+    assert r_vcf.status_code == 200
+    first_name = emp["full_name"].split()[1] if len(emp["full_name"].split()) > 1 else emp["full_name"]
+    assert first_name in r_vcf.json()["text"]
+
+    # 2. MAX contact attachment with attachments directly under message
+    emp3 = emps[2]
+    user_id_vcf2 = f"9900{emp3['id']}"
+    vcard_str2 = f"BEGIN:VCARD\r\nVERSION:3.0\r\nFN:{emp3['full_name']}\r\nTEL;TYPE=CELL:{emp3['phone']}\r\nEND:VCARD"
+    r_vcf2 = client.post("/api/chat/webhook", json={
+        "update_type": "message_created",
+        "message": {
+            "sender": {"user_id": user_id_vcf2},
+            "attachments": [
+                {
+                    "type": "contact",
+                    "payload": {
+                        "vcf_info": vcard_str2,
+                    }
+                }
+            ]
+        }
+    })
+    assert r_vcf2.status_code == 200
+    first_name3 = emp3["full_name"].split()[1] if len(emp3["full_name"].split()) > 1 else emp3["full_name"]
+    assert first_name3 in r_vcf2.json()["text"]
+
+    # 3. Anti-spoofing: plain text phone number does NOT authenticate user
+    emp4 = emps[3]
+    phone_clean_digits = re.sub(r"[^\d]", "", emp4["phone"])
+    phone_8_format = "8" + phone_clean_digits[-10:]
+    user_id_text = f"9900{emp4['id']}"
+    r_text_phone = client.post("/api/chat/webhook", json={
+        "user_id": user_id_text,
+        "text": phone_8_format,
+    })
+    assert r_text_phone.status_code == 200
+    assert "отправьте ваш контакт через кнопку" in r_text_phone.json()["text"]
+    assert r_text_phone.json().get("request_contact_button") is True
+    emp4_check = client.get(f"/api/employees/{emp4['id']}").json()
+    assert emp4_check.get("max_user_id") != user_id_text
+
+    # 4. Anti-spoofing: formatted phone in text does NOT authenticate user
+    emp5 = emps[4]
+    p_last = emp5["phone"][-10:]
+    formatted_phone = f"+7 ({p_last[:3]}) {p_last[3:6]}-{p_last[6:8]}-{p_last[8:]}"
+    user_id_text2 = f"9900{emp5['id']}"
+    r_formatted = client.post("/api/chat/webhook", json={
+        "user_id": user_id_text2,
+        "text": f"Здравствуйте, мой номер {formatted_phone}",
+    })
+    assert r_formatted.status_code == 200
+    assert "отправьте ваш контакт через кнопку" in r_formatted.json()["text"]
+    assert r_formatted.json().get("request_contact_button") is True
+    emp5_check = client.get(f"/api/employees/{emp5['id']}").json()
+    assert emp5_check.get("max_user_id") != user_id_text2
+
+    # 5. Admin authentication via vCard
+    r_adm_create = client.post("/api/bot-admins", json={
+        "phone": "+79990000001",
+        "full_name": "Администратор Тестовый",
+        "role_title": "Системный администратор",
+        "notify_on_new_request": True,
+    })
+    adm_id = r_adm_create.json().get("id")
+
+    vcard_admin = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Администратор Тестовый\r\nTEL;TYPE=CELL:+79990000001\r\nEND:VCARD"
+    r_adm_vcf = client.post("/api/chat/webhook", json={
+        "update_type": "message_created",
+        "message": {
+            "sender": {"user_id": "78699999", "name": "Администратор Тестовый"},
+            "body": {
+                "attachments": [
+                    {
+                        "type": "contact",
+                        "payload": {
+                            "vcf_info": vcard_admin,
+                        }
+                    }
+                ]
+            }
+        }
+    })
+    assert r_adm_vcf.status_code == 200
+    assert "Администратор Тестовый" in r_adm_vcf.json()["text"]
+    assert "авторизованы как администратор" in r_adm_vcf.json()["text"]
+
+    if adm_id:
+        client.delete(f"/api/bot-admins/{adm_id}")
+
 
 
 def test_api_shift_quotas():
@@ -286,6 +438,33 @@ def test_api_incompatible_employee_groups():
     assert r_del.status_code == 200
     groups_after = client.get("/api/rules/incompatible-groups").json()
     assert not any(g["id"] == gid for g in groups_after)
+
+
+def test_api_export_and_chat_reset():
+    # 1. Verify Excel T-7 export works without pandas
+    r_xlsx = client.get("/api/export/excel")
+    assert r_xlsx.status_code == 200
+    assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in r_xlsx.headers.get("content-type", "")
+    assert len(r_xlsx.content) > 1000
+
+    # 2. Verify CSV export
+    r_csv = client.get("/api/export/csv")
+    assert r_csv.status_code == 200
+    assert "text/csv" in r_csv.headers.get("content-type", "")
+
+    # 3. Verify chat reset clears draft and chat history auto-seeds AGENT greeting
+    emps = client.get("/api/employees").json()
+    emp_id = emps[0]["id"]
+    r_reset = client.post(f"/api/chat/reset/{emp_id}")
+    assert r_reset.status_code == 200
+
+    r_hist = client.get(f"/api/chat/history/{emp_id}")
+    assert r_hist.status_code == 200
+    msgs = r_hist.json()
+    assert len(msgs) == 1
+    assert msgs[0]["sender"] == "AGENT"
+    assert msgs[0]["payload"]["action"] == "GREETING"
+
 
 
 

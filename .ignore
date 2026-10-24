@@ -13,12 +13,19 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Local Database & Logs
+# Local Database, Binaries & Media (Exclude from AI indexing to save tokens)
 *.log
 *.db
 *.sqlite3
+*.exe
+*.jpg
+*.jpeg
+*.png
+*.ico
+*.xlsx
 scratch/
 .system_generated/
+.git/
 .env
 .env.*
 

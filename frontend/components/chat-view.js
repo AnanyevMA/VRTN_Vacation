@@ -9,10 +9,14 @@ window.ChatView = {
     ],
     computed: {
         draftSlots() {
-            // Find if there is an active draft payload in the last message
+            // Find the latest message carrying draft state
             for (let i = this.chatMessages.length - 1; i >= 0; i--) {
                 const p = this.chatMessages[i].payload;
-                if (p && p.draft_slots && p.draft_slots.length > 0) {
+                if (!p) continue;
+                if (p.action === 'DRAFT_RESET' || p.action === 'SUBMISSION_CONFIRMED') {
+                    return [];
+                }
+                if (Array.isArray(p.draft_slots)) {
                     return p.draft_slots;
                 }
             }
@@ -53,8 +57,8 @@ window.ChatView = {
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;");
-            escaped = escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            escaped = escaped.replace(/\*(.*?)\*/g, '<em>$1</em>');
+            escaped = escaped.replace(/\*\*([^\n*]+?)\*\*/g, '<strong>$1</strong>');
+            escaped = escaped.replace(/\*([^\n*]+?)\*/g, '<em>$1</em>');
             return escaped;
         }
     },

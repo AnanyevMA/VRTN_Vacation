@@ -36,3 +36,14 @@ def test_confirmation_and_reset_intents():
     assert check_confirmation_intent("ок") is True
     assert check_reset_intent("сброс") is True
     assert check_reset_intent("начать заново") is True
+
+
+def test_option_selection_does_not_match_dates():
+    assert check_option_selection("1") == 1
+    assert check_option_selection("Вариант 2") == 2
+    assert check_option_selection("выбираю вариант 3") == 3
+    # Must NOT match date strings containing digits 1, 2, or 3
+    assert check_option_selection("Хочу с 1 по 14 августа 2026") is None
+    assert check_option_selection("с 2 по 15 сентября 2026") is None
+    assert check_option_selection("с 3 октября на 14 дней") is None
+

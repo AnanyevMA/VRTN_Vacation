@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 
-from backend.models import Employee, VacationSlot, ScheduleRule, JobRole
+from backend.models import Employee, VacationSlot, ScheduleRule, JobRole, WorkShift
 from backend.solver.nlp_date_parser import calculate_slot_days
 
 
@@ -12,9 +12,23 @@ class VacationOptimizer:
         self._load_rules()
 
     def _load_rules(self):
-        """Loads active HARD and SOFT rules from the database."""
+        """Loads active rules and preloads reference tables into memory to avoid N+1 queries in search loops."""
         rules = self.db.query(ScheduleRule).filter(ScheduleRule.is_active == True).all()
         self.rules_by_key: Dict[str, ScheduleRule] = {r.rule_key: r for r in rules}
+        self._role_quotas_db: Dict[str, int] = {
+            r.name: r.default_quota for r in self.db.query(JobRole).all() if r.default_quota is not None
+        }
+        self._shift_quotas_db: Dict[str, int] = {
+            s.name: s.default_quota for s in self.db.query(WorkShift).all() if s.default_quota is not None
+        }
+        self._active_employees: Dict[int, Employee] = {
+            e.id: e for e in self.db.query(Employee).filter(Employee.is_active == True).all()
+        }
+        self._active_slots: List[VacationSlot] = (
+            self.db.query(VacationSlot)
+            .filter(VacationSlot.status.in_(["APPROVED", "REQUESTED"]))
+            .all()
+        )
 
     def validate_and_check_slots(
         self,
@@ -26,7 +40,8 @@ class VacationOptimizer:
         Validates the requested slots against Hard constraints (TK RF, Role quotas, Blackouts).
         Supports multi-year schedules (2026, 2027, 2028...).
         """
-        employee = self.db.query(Employee).filter(Employee.id == employee_id).first()
+        self._load_rules()
+        employee = self._active_employees.get(employee_id) or self.db.query(Employee).filter(Employee.id == employee_id).first()
         if not employee:
             return {
                 "status": "ERROR",
@@ -152,10 +167,8 @@ class VacationOptimizer:
         return None
 
     def _get_role_quota(self, role_name: str) -> int:
-        # Check JobRole table first
-        job_role = self.db.query(JobRole).filter(JobRole.name == role_name).first()
-        if job_role:
-            return job_role.default_quota
+        if role_name in self._role_quotas_db:
+            return self._role_quotas_db[role_name]
 
         rule = self.rules_by_key.get("max_concurrent_roles")
         if not rule or not rule.is_active:
@@ -168,33 +181,23 @@ class VacationOptimizer:
     ) -> bool:
         quota = self._get_role_quota(employee.role)
 
-        # Query active colleagues with same role
-        colleagues = (
-            self.db.query(Employee)
-            .filter(
-                Employee.role == employee.role,
-                Employee.id != employee.id,
-                Employee.is_active == True,
-            )
-            .all()
-        )
-        colleague_ids = [c.id for c in colleagues]
+        colleague_ids = {
+            eid for eid, emp in self._active_employees.items()
+            if emp.role == employee.role and eid != employee.id
+        }
         if not colleague_ids:
             return False
 
-        other_slots_query = (
-            self.db.query(VacationSlot)
-            .filter(
-                VacationSlot.employee_id.in_(colleague_ids),
-                VacationSlot.status.in_(["APPROVED", "REQUESTED"]),
-                VacationSlot.start_date <= end,
-                VacationSlot.end_date >= start,
-            )
-        )
-        if exclude_slot_id:
-            other_slots_query = other_slots_query.filter(VacationSlot.id != exclude_slot_id)
-
-        other_slots = other_slots_query.all()
+        other_slots = [
+            s for s in self._active_slots
+            if s.employee_id in colleague_ids
+            and s.status in ("APPROVED", "REQUESTED")
+            and s.start_date <= end
+            and s.end_date >= start
+            and (exclude_slot_id is None or s.id != exclude_slot_id)
+        ]
+        if not other_slots:
+            return False
 
         cur_day = start
         while cur_day <= end:
@@ -206,10 +209,8 @@ class VacationOptimizer:
         return False
 
     def _get_shift_quota(self, shift_name: str) -> int:
-        from backend.models import WorkShift
-        shift = self.db.query(WorkShift).filter(WorkShift.name == shift_name).first()
-        if shift and shift.default_quota is not None:
-            return shift.default_quota
+        if shift_name in self._shift_quotas_db:
+            return self._shift_quotas_db[shift_name]
 
         rule = self.rules_by_key.get("max_concurrent_shifts")
         if not rule or not rule.is_active:
@@ -224,33 +225,23 @@ class VacationOptimizer:
             return False
         quota = self._get_shift_quota(employee.shift)
 
-        # Query active colleagues in the same shift
-        colleagues = (
-            self.db.query(Employee)
-            .filter(
-                Employee.shift == employee.shift,
-                Employee.id != employee.id,
-                Employee.is_active == True,
-            )
-            .all()
-        )
-        colleague_ids = [c.id for c in colleagues]
+        colleague_ids = {
+            eid for eid, emp in self._active_employees.items()
+            if emp.shift == employee.shift and eid != employee.id
+        }
         if not colleague_ids:
             return False
 
-        other_slots_query = (
-            self.db.query(VacationSlot)
-            .filter(
-                VacationSlot.employee_id.in_(colleague_ids),
-                VacationSlot.status.in_(["APPROVED", "REQUESTED"]),
-                VacationSlot.start_date <= end,
-                VacationSlot.end_date >= start,
-            )
-        )
-        if exclude_slot_id:
-            other_slots_query = other_slots_query.filter(VacationSlot.id != exclude_slot_id)
-
-        other_slots = other_slots_query.all()
+        other_slots = [
+            s for s in self._active_slots
+            if s.employee_id in colleague_ids
+            and s.status in ("APPROVED", "REQUESTED")
+            and s.start_date <= end
+            and s.end_date >= start
+            and (exclude_slot_id is None or s.id != exclude_slot_id)
+        ]
+        if not other_slots:
+            return False
 
         cur_day = start
         while cur_day <= end:
@@ -276,31 +267,32 @@ class VacationOptimizer:
             return None
 
         for group in groups:
-            other_emp_ids = [eid for eid in group.get("employee_ids", []) if eid != employee.id]
+            other_emp_ids = {eid for eid in group.get("employee_ids", []) if eid != employee.id}
             if not other_emp_ids:
                 continue
             max_concurrent = group.get("max_concurrent", 1)
 
-            other_slots_query = (
-                self.db.query(VacationSlot)
-                .filter(
-                    VacationSlot.employee_id.in_(other_emp_ids),
-                    VacationSlot.status.in_(["APPROVED", "REQUESTED"]),
-                    VacationSlot.start_date <= end,
-                    VacationSlot.end_date >= start,
-                )
-            )
-            if exclude_slot_id:
-                other_slots_query = other_slots_query.filter(VacationSlot.id != exclude_slot_id)
-            other_slots = other_slots_query.all()
+            other_slots = [
+                s for s in self._active_slots
+                if s.employee_id in other_emp_ids
+                and s.status in ("APPROVED", "REQUESTED")
+                and s.start_date <= end
+                and s.end_date >= start
+                and (exclude_slot_id is None or s.id != exclude_slot_id)
+            ]
+            if not other_slots:
+                continue
 
             cur_day = start
             while cur_day <= end:
                 overlapping_slots = [s for s in other_slots if s.start_date <= cur_day <= s.end_date]
                 if len(overlapping_slots) + 1 > max_concurrent:
-                    conflicting_emp_ids = list({s.employee_id for s in overlapping_slots})
-                    conflicting_emps = self.db.query(Employee).filter(Employee.id.in_(conflicting_emp_ids)).all()
-                    names = [e.full_name for e in conflicting_emps]
+                    conflicting_emp_ids = {s.employee_id for s in overlapping_slots}
+                    names = [
+                        self._active_employees[eid].full_name
+                        for eid in conflicting_emp_ids
+                        if eid in self._active_employees
+                    ]
                     return {
                         "group_name": group.get("name", "Группа непересечения"),
                         "conflicting_names": names,
@@ -311,16 +303,22 @@ class VacationOptimizer:
 
         return None
 
-    def is_slot_valid(self, employee: Employee, start: date, end: date) -> bool:
-        if self._check_blackout_intersection(start, end):
-            return False
+    def _get_first_conflict_reason(self, employee: Employee, start: date, end: date) -> Optional[str]:
+        b_name = self._check_blackout_intersection(start, end)
+        if b_name:
+            return f"Попадание на блэкаут-период: «{b_name}»"
         if self._check_role_quota_violation(employee, start, end):
-            return False
+            return f"Превышение квоты одновременного отсутствия для должности «{employee.role}»"
         if self._check_shift_quota_violation(employee, start, end):
-            return False
-        if self._check_incompatible_groups_violation(employee, start, end):
-            return False
-        return True
+            return f"Превышение лимита одновременных отпусков для смены «{employee.shift}»"
+        incomp = self._check_incompatible_groups_violation(employee, start, end)
+        if incomp:
+            return f"Пересечение в группе «{incomp['group_name']}» ({', '.join(incomp['conflicting_names'])})"
+        return None
+
+    def is_slot_valid(self, employee: Employee, start: date, end: date) -> bool:
+        return self._get_first_conflict_reason(employee, start, end) is None
+
 
     def _find_candidate_slot(
         self, employee: Employee, target_start: date, duration: int, search_direction: int, max_days: int
@@ -426,6 +424,7 @@ class VacationOptimizer:
 
     def batch_optimize_all_pending(self, year: Optional[int] = None) -> Dict[str, Any]:
         """Runs batch global optimization for manager ('Approve All Valid')."""
+        self._load_rules()
         query = (
             self.db.query(VacationSlot)
             .filter(VacationSlot.status.in_(["REQUESTED", "REVISED"]))
@@ -444,9 +443,9 @@ class VacationOptimizer:
 
         for slot in pending_slots:
             emp = slot.employee
-            is_valid = self.is_slot_valid(emp, slot.start_date, slot.end_date)
-            
-            if is_valid:
+            reason = self._get_first_conflict_reason(emp, slot.start_date, slot.end_date)
+
+            if reason is None:
                 slot.status = "APPROVED"
                 slot.conflict_reason = None
                 approved_count += 1
@@ -458,7 +457,7 @@ class VacationOptimizer:
                 })
             else:
                 slot.status = "CONFLICT"
-                slot.conflict_reason = f"Превышение квоты одновременного отсутствия для должности «{emp.role}»"
+                slot.conflict_reason = reason
                 conflicts_count += 1
                 details.append({
                     "slot_id": slot.id,
@@ -467,6 +466,7 @@ class VacationOptimizer:
                     "status": "CONFLICT",
                     "reason": slot.conflict_reason,
                 })
+
 
         self.db.commit()
         return {

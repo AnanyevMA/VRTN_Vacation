@@ -1,11 +1,13 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
+from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from backend.database import get_db
 from backend.models import Employee, Department, VacationSlot
 from backend.schemas import EmployeeCreate, EmployeeUpdate, EmployeeOut
 from backend.agents.manager_agent import ManagerAgent
+from backend.auth import require_admin
 
 router = APIRouter(prefix="/api/employees", tags=["Employee Management"])
 
@@ -18,7 +20,7 @@ def list_employees(
     search: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    query = db.query(Employee)
+    query = db.query(Employee).options(joinedload(Employee.department))
     if department_id:
         query = query.filter(Employee.department_id == department_id)
     if role:
@@ -30,10 +32,18 @@ def list_employees(
         query = query.filter((Employee.full_name.ilike(s)) | (Employee.phone.ilike(s)) | (Employee.role.ilike(s)))
 
     employees = query.order_by(Employee.id.asc()).all()
-    results = []
+    if not employees:
+        return []
 
+    emp_ids = [e.id for e in employees]
+    all_slots = db.query(VacationSlot).filter(VacationSlot.employee_id.in_(emp_ids)).all()
+    slots_by_emp: Dict[int, List[VacationSlot]] = defaultdict(list)
+    for sl in all_slots:
+        slots_by_emp[sl.employee_id].append(sl)
+
+    results = []
     for emp in employees:
-        slots = db.query(VacationSlot).filter(VacationSlot.employee_id == emp.id).all()
+        slots = slots_by_emp.get(emp.id, [])
         scheduled_days = sum(s.days_count for s in slots)
         total = emp.total_vacation_days or 36
         rem = max(0, total - scheduled_days)
@@ -46,6 +56,7 @@ def list_employees(
             status_summary = "APPROVED"
         else:
             status_summary = "PENDING"
+
 
         emp_out = EmployeeOut(
             id=emp.id,
@@ -72,7 +83,7 @@ def list_employees(
     return results
 
 
-@router.post("", response_model=EmployeeOut)
+@router.post("", response_model=EmployeeOut, dependencies=[Depends(require_admin)])
 def create_employee(emp_in: EmployeeCreate, db: Session = Depends(get_db)):
     agent = ManagerAgent(db)
     res = agent.update_rules_and_roster("ADD_USER", emp_in.model_dump())
@@ -102,7 +113,7 @@ def create_employee(emp_in: EmployeeCreate, db: Session = Depends(get_db)):
     )
 
 
-@router.put("/{employee_id}")
+@router.put("/{employee_id}", dependencies=[Depends(require_admin)])
 def update_employee(employee_id: int, emp_up: EmployeeUpdate, db: Session = Depends(get_db)):
     agent = ManagerAgent(db)
     payload = emp_up.model_dump(exclude_unset=True)
@@ -113,7 +124,7 @@ def update_employee(employee_id: int, emp_up: EmployeeUpdate, db: Session = Depe
     return {"message": "Сотрудник успешно обновлен"}
 
 
-@router.delete("/{employee_id}")
+@router.delete("/{employee_id}", dependencies=[Depends(require_admin)])
 def delete_employee(employee_id: int, db: Session = Depends(get_db)):
     agent = ManagerAgent(db)
     res = agent.update_rules_and_roster("DELETE_USER", {"employee_id": employee_id})
@@ -122,14 +133,14 @@ def delete_employee(employee_id: int, db: Session = Depends(get_db)):
     return {"message": "Сотрудник удален"}
 
 
-@router.post("/sync-google-sheets")
+@router.post("/sync-google-sheets", dependencies=[Depends(require_admin)])
 def sync_google_sheets(db: Session = Depends(get_db)):
     from backend.google_sheets_importer import sync_real_employees_to_db
     res = sync_real_employees_to_db(db)
     return res
 
 
-@router.put("/{employee_id}/bot-access")
+@router.put("/{employee_id}/bot-access", dependencies=[Depends(require_admin)])
 def update_bot_access(employee_id: int, status: str = Query(..., pattern="^(APPROVED|PENDING|BLOCKED)$"), db: Session = Depends(get_db)):
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:

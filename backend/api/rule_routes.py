@@ -15,6 +15,7 @@ from backend.schemas import (
     IncompatibleGroupOut,
 )
 from backend.agents.manager_agent import ManagerAgent
+from backend.auth import require_admin
 
 router = APIRouter(prefix="/api/rules", tags=["Schedule Rules Engine"])
 
@@ -24,14 +25,14 @@ def get_rules(db: Session = Depends(get_db)):
     return db.query(ScheduleRule).order_by(ScheduleRule.id.asc()).all()
 
 
-@router.post("/action", response_model=UpdateRulesAndRosterResponse)
+@router.post("/action", response_model=UpdateRulesAndRosterResponse, dependencies=[Depends(require_admin)])
 def execute_rule_or_roster_action(req: UpdateRulesAndRosterRequest, db: Session = Depends(get_db)):
     agent = ManagerAgent(db)
     res = agent.update_rules_and_roster(action=req.action, payload=req.payload)
     return UpdateRulesAndRosterResponse(**res)
 
 
-@router.put("/role-quotas")
+@router.put("/role-quotas", dependencies=[Depends(require_admin)])
 def update_role_quotas(payload: Dict[str, int], db: Session = Depends(get_db)):
     # Update JobRole.default_quota for all matching roles
     for role_name, quota in payload.items():
@@ -55,14 +56,14 @@ def update_role_quotas(payload: Dict[str, int], db: Session = Depends(get_db)):
     return {"success": True, "message": "Квоты ролей успешно обновлены в единой базе"}
 
 
-@router.put("/blackouts")
+@router.put("/blackouts", dependencies=[Depends(require_admin)])
 def update_blackout_periods(periods: List[Dict[str, Any]], db: Session = Depends(get_db)):
     agent = ManagerAgent(db)
     res = agent.update_rules_and_roster("UPDATE_BLACKOUTS", {"periods": periods})
     return res
 
 
-@router.put("/{rule_id}/toggle")
+@router.put("/{rule_id}/toggle", dependencies=[Depends(require_admin)])
 def toggle_rule(rule_id: int, db: Session = Depends(get_db)):
     rule = db.query(ScheduleRule).filter(ScheduleRule.id == rule_id).first()
     if not rule:
@@ -72,7 +73,7 @@ def toggle_rule(rule_id: int, db: Session = Depends(get_db)):
     return {"message": f"Статус правила {rule.rule_key} изменен на {'активно' if rule.is_active else 'выключено'}", "is_active": rule.is_active}
 
 
-@router.put("/shift-quotas")
+@router.put("/shift-quotas", dependencies=[Depends(require_admin)])
 def update_shift_quotas(payload: Dict[str, int], db: Session = Depends(get_db)):
     """Update concurrency quotas for work shifts across WorkShift table and ScheduleRule."""
     for shift_name, quota in payload.items():
@@ -119,7 +120,7 @@ def get_incompatible_groups(db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/incompatible-groups", response_model=IncompatibleGroupOut)
+@router.post("/incompatible-groups", response_model=IncompatibleGroupOut, dependencies=[Depends(require_admin)])
 def create_incompatible_group(payload: IncompatibleGroupCreate, db: Session = Depends(get_db)):
     """Creates a new employee mutual-exclusion group."""
     if len(payload.employee_ids) < 2:
@@ -162,7 +163,7 @@ def create_incompatible_group(payload: IncompatibleGroupCreate, db: Session = De
     )
 
 
-@router.delete("/incompatible-groups/{group_id}")
+@router.delete("/incompatible-groups/{group_id}", dependencies=[Depends(require_admin)])
 def delete_incompatible_group(group_id: str, db: Session = Depends(get_db)):
     """Deletes an employee mutual-exclusion group by id."""
     rule = db.query(ScheduleRule).filter(ScheduleRule.rule_key == "incompatible_employee_groups").first()

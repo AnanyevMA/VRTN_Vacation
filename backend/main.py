@@ -26,16 +26,33 @@ async def lifespan(app: FastAPI):
     yield
 
 
+is_production = os.getenv("ENVIRONMENT", "").strip().lower() == "production"
+
 app = FastAPI(
     title="Garment Factory Vacation Scheduling Multi-Agent System (MAX + Dashboard)",
     description="Multi-Agent System for garment manufacturing plant with multi-year Gantt, shifts, departments, roles CRUD, and MAX accumulative draft.",
     version="2.0.0",
     lifespan=lifespan,
+    root_path=os.getenv("ROOT_PATH", ""),
+    docs_url=None if is_production else "/docs",
+    redoc_url=None if is_production else "/redoc",
+    openapi_url=None if is_production else "/openapi.json",
 )
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+raw_cors = os.getenv("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,http://46.149.79.201")
+cors_origins = [o.strip() for o in raw_cors.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -31,7 +31,7 @@
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="static/style.css">
 </head>
 <body class="bg-slate-900 text-slate-100 font-sans antialiased min-h-screen flex flex-col">
     <div id="app" v-cloak class="flex-1 flex flex-col">
@@ -94,16 +94,28 @@
                 </button>
             </div>
 
-            <!-- Export Controls -->
+            <!-- Export Controls & Admin Key -->
             <div class="flex items-center space-x-2">
-                <a href="/api/export/excel" class="bg-slate-700/80 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-slate-600/70 transition">
+                <button 
+                    @click="openAdminModal()" 
+                    :class="adminToken ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300 hover:bg-emerald-900/60' : 'bg-slate-700/80 border-slate-600/70 text-slate-300 hover:bg-slate-700'"
+                    class="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border transition shadow-sm"
+                    title="Режим администратора (X-Admin-Token)">
+                    <i data-lucide="key" class="w-4 h-4" :class="adminToken ? 'text-emerald-400' : 'text-amber-400'"></i>
+                    <span>{{ adminToken ? 'Режим администратора' : 'Режим администратора' }}</span>
+                </button>
+                <button 
+                    @click.prevent="downloadExport('excel')" 
+                    class="bg-slate-700/80 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-slate-600/70 transition">
                     <i data-lucide="file-spreadsheet" class="w-4 h-4 text-emerald-400"></i>
                     Форма Т-7 (.xlsx)
-                </a>
-                <a href="/api/export/csv" class="bg-slate-700/80 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-slate-600/70 transition">
+                </button>
+                <button 
+                    @click.prevent="downloadExport('csv')" 
+                    class="bg-slate-700/80 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-slate-600/70 transition">
                     <i data-lucide="download" class="w-4 h-4 text-sky-400"></i>
                     CSV
-                </a>
+                </button>
             </div>
         </header>
 
@@ -346,15 +358,69 @@
                 </div>
             </div>
         </div>
+
+        <!-- Admin Key Modal Dialog (R2) -->
+        <div v-if="showAdminModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+                <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <h3 class="font-bold text-white text-base flex items-center gap-2">
+                        <i data-lucide="shield-check" class="w-5 h-5 text-indigo-400"></i>
+                        Режим администратора
+                    </h3>
+                    <button @click="showAdminModal = false" class="text-slate-400 hover:text-white">✕</button>
+                </div>
+
+                <div v-if="adminAuthError" class="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+                    <i data-lucide="alert-circle" class="w-4 h-4 flex-shrink-0 text-rose-400"></i>
+                    <span>{{ adminAuthError }}</span>
+                </div>
+
+                <p class="text-xs text-slate-300 leading-relaxed">
+                    Для выполнения административных действий (изменение квот, согласование отпусков, синхронизация сотрудников) укажите ключ доступа (<code class="bg-slate-800 px-1 py-0.5 rounded text-indigo-300">ADMIN_API_KEY</code>). Токен сохраняется в локальном хранилище браузера.
+                </p>
+
+                <div>
+                    <label class="block text-xs font-medium text-slate-400 mb-1">Ключ администратора (X-Admin-Token):</label>
+                    <input 
+                        v-model="adminTokenInput" 
+                        type="password" 
+                        placeholder="Введите секретный ключ администратора..." 
+                        class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                        @keyup.enter="saveAdminToken()"
+                    />
+                </div>
+
+                <div class="flex items-center justify-between text-xs pt-2">
+                    <div class="flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full" :class="adminToken ? 'bg-emerald-400' : 'bg-slate-500'"></span>
+                        <span :class="adminToken ? 'text-emerald-400' : 'text-slate-400'">
+                            {{ adminToken ? 'Ключ сохранен' : 'Ключ не установлен' }}
+                        </span>
+                    </div>
+                    <button v-if="adminToken" @click="clearAdminToken" class="text-rose-400 hover:text-rose-300 text-xs">
+                        Очистить ключ
+                    </button>
+                </div>
+
+                <div class="flex items-center justify-end space-x-2 pt-3 border-t border-slate-800">
+                    <button @click="showAdminModal = false" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition">
+                        Отмена
+                    </button>
+                    <button @click="saveAdminToken()" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition">
+                        Сохранить ключ
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Modular Component Scripts -->
-    <script src="/static/components/gantt-view.js"></script>
-    <script src="/static/components/roster-view.js"></script>
-    <script src="/static/components/dept-roles-view.js"></script>
-    <script src="/static/components/rules-view.js"></script>
-    <script src="/static/components/chat-view.js"></script>
+    <script src="static/components/gantt-view.js"></script>
+    <script src="static/components/roster-view.js"></script>
+    <script src="static/components/dept-roles-view.js"></script>
+    <script src="static/components/rules-view.js"></script>
+    <script src="static/components/chat-view.js"></script>
     <!-- Root Vue Application Script -->
-    <script src="/static/app.js"></script>
+    <script src="static/app.js"></script>
 </body>
 </html>

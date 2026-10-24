@@ -150,7 +150,9 @@ def calculate_slot_days(start_date: date, end_date: date) -> int:
 
 
 def check_option_selection(text: str) -> Optional[int]:
-    text_clean = text.lower().strip()
+    if not text:
+        return None
+    text_clean = text.lower().strip().rstrip(".!")
     if text_clean in ["1", "1️⃣", "первый", "вариант 1", "вариант 1️⃣", "1 вариант", "выбираю 1", "давай 1", "номер 1"]:
         return 1
     if text_clean in ["2", "2️⃣", "второй", "вариант 2", "вариант 2️⃣", "2 вариант", "выбираю 2", "давай 2", "номер 2"]:
@@ -158,28 +160,37 @@ def check_option_selection(text: str) -> Optional[int]:
     if text_clean in ["3", "3️⃣", "третий", "вариант 3", "вариант 3️⃣", "3 вариант", "выбираю 3", "давай 3", "номер 3"]:
         return 3
 
-    m = re.search(r"(?:вариант|опци[яю]|номер)?\s*([1-3])\b", text_clean)
+    # Never treat a message with explicit vacation dates as an option number
+    if parse_russian_vacation_text(text):
+        return None
+
+    m = re.search(r"\b(?:вариант|опци[яю]|номер)\s*([1-3])\b", text_clean)
     if m:
         return int(m.group(1))
     return None
 
 
+
 def check_confirmation_intent(text: str) -> bool:
     """Returns True if text expresses confirmation to submit draft to manager."""
     text_clean = text.lower().strip()
-    keywords = [
-        "подтверждаю", "подтвердить", "да", "отправь", "отправить", "отправляй",
+    words = set(re.findall(r'\b\w+\b', text_clean))
+    exact_shorts = {"да", "ок", "ok", "yes", "ага", "угу"}
+    confirm_phrases = [
+        "подтверждаю", "подтвердить", "отправь", "отправить", "отправляй",
         "согласен", "согласна", "все верно", "всё верно", "подходит", "готово",
-        "отправить руководителю", "да, отправить", "confirm", "submit", "ок", "ok"
+        "confirm", "submit"
     ]
-    return any(k in text_clean for k in keywords)
+    return bool(words & exact_shorts) or any(re.search(r'\b' + re.escape(k) + r'\b', text_clean) for k in confirm_phrases)
 
 
 def check_reset_intent(text: str) -> bool:
     """Returns True if text requests clearing or resetting the draft."""
     text_clean = text.lower().strip()
-    keywords = [
-        "сброс", "сбросить", "начать заново", "очистить", "заново", "отмена",
-        "переделать", "reset", "clear", "сбросить черновик"
+    words = set(re.findall(r'\b\w+\b', text_clean))
+    exact_shorts = {"сброс", "заново", "отмена", "reset", "clear"}
+    reset_phrases = [
+        "сбросить", "начать заново", "очистить", "переделать", "сбросить черновик"
     ]
-    return any(k in text_clean for k in keywords)
+    return bool(words & exact_shorts) or any(re.search(r'\b' + re.escape(k) + r'\b', text_clean) for k in reset_phrases)
+
