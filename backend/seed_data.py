@@ -11,7 +11,7 @@ def seed_database():
     if db.query(Department).count() > 0:
         # Check if real employees are synced
         synth = db.query(Employee).filter(Employee.full_name == "Иванова Татьяна Сергеевна").first()
-        if synth:
+        if synth or db.query(Employee).count() == 0:
             sync_real_employees_to_db(db)
         ensure_default_rules(db)
         db.close()
@@ -164,6 +164,10 @@ def seed_database():
         db.add(rule)
     db.commit()
 
+    # 5. Import Employees from Google Sheets or Synthetic Fallback
+    sync_real_employees_to_db(db)
+    db.close()
+
 
 def ensure_default_rules(db):
     """Ensures shift quotas and incompatible employee group rules exist in existing databases."""
@@ -199,10 +203,6 @@ def ensure_default_rules(db):
         )
         db.add(incomp_rule)
         db.commit()
-
-    # 5. Import Real Employees from Google Sheets (Листы 965162738 и 1223050114)
-    sync_real_employees_to_db(db)
-    db.close()
 
 
 if __name__ == "__main__":
