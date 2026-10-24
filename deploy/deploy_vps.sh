@@ -66,7 +66,7 @@ GEMINI_MODEL=gemini-2.5-flash-lite
 
 # Токен бота MAX Messenger
 MAX_BOT_TOKEN=
-MAX_API_URL=https://platform-api2.max.ru
+MAX_API_URL=https://platform-api.max.ru
 WEBHOOK_SECRET=${GENERATED_WEBHOOK_SECRET}
 
 # Защита административных API (X-Admin-Token)
