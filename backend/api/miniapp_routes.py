@@ -78,7 +78,7 @@ def _check_is_admin(db: Session, max_user_id: Optional[str], x_admin_token: Opti
 def get_miniapp_context(
     max_user_id: Optional[str] = Query(None, max_length=128),
     employee_id: Optional[int] = Query(None, ge=1),
-    year: int = Query(2026, ge=2025, le=2035),
+    year: Optional[int] = Query(None, ge=2025, le=2035),
     x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
     db: Session = Depends(get_db),
 ):
@@ -100,6 +100,23 @@ def get_miniapp_context(
             uid = employee.max_user_id.strip()
 
     admin = _check_is_admin(db, uid, x_admin_token)
+
+    if year is None:
+        # Auto-select year where employee or company has planned slots (default 2026)
+        year = 2026
+        if employee:
+            emp_slot = (
+                db.query(VacationSlot)
+                .filter(VacationSlot.employee_id == employee.id)
+                .order_by(VacationSlot.start_date.desc())
+                .first()
+            )
+            if emp_slot and emp_slot.start_date.year in (2026, 2027):
+                year = emp_slot.start_date.year
+        else:
+            any_slot = db.query(VacationSlot).order_by(VacationSlot.start_date.desc()).first()
+            if any_slot and any_slot.start_date.year in (2026, 2027):
+                year = any_slot.start_date.year
 
     depts = {d.id: d.name for d in db.query(Department).all()}
     shifts_list = [
@@ -197,11 +214,11 @@ def get_miniapp_context(
     admin_section = None
     if admin:
         mgr = ManagerAgent(db)
-        summary = mgr.get_dashboard_summary(year=year)
+        summary = mgr.get_dashboard_summary()
         emp_map = {e.id: e for e in all_employees}
         pending_slots_out = []
         for sl in all_year_slots:
-            if sl.status in ("PENDING", "CONFLICT", "NEEDS_APPROVAL"):
+            if sl.status in ("REQUESTED", "REVISED", "PENDING", "CONFLICT", "NEEDS_APPROVAL"):
                 e_obj = emp_map.get(sl.employee_id)
                 if e_obj:
                     pending_slots_out.append({
@@ -217,6 +234,8 @@ def get_miniapp_context(
                         "is_primary_block": sl.is_primary_block,
                         "status": sl.status,
                     })
+        summary["pending_slots_count"] = len([s for s in pending_slots_out if s["status"] != "CONFLICT"])
+        summary["conflict_slots_count"] = len([s for s in pending_slots_out if s["status"] == "CONFLICT"])
 
         employees_access = [
             {

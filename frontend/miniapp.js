@@ -66,6 +66,7 @@ createApp({
     setup() {
         const activeTab = ref('my');
         const selectedYear = ref(2026);
+        const yearPickedByUser = ref(false);
         const maxUserId = ref(detectMaxUserId());
         const adminToken = ref(localStorage.getItem('vacation_admin_token') || '');
 
@@ -124,9 +125,10 @@ createApp({
                     const detected = detectMaxUserId();
                     if (detected) maxUserId.value = detected;
                 }
-                const q = new URLSearchParams({
-                    year: String(selectedYear.value),
-                });
+                const q = new URLSearchParams();
+                if (yearPickedByUser.value) {
+                    q.set('year', String(selectedYear.value));
+                }
                 if (maxUserId.value) {
                     q.set('max_user_id', maxUserId.value);
                 }
@@ -138,6 +140,12 @@ createApp({
                 });
                 if (!res.ok) return;
                 const data = await res.json();
+
+                if (data.year && !yearPickedByUser.value && data.year !== selectedYear.value) {
+                    selectedYear.value = data.year;
+                    formStart.value = `${data.year}-07-01`;
+                    formEnd.value = `${data.year}-07-14`;
+                }
 
                 if (data.resolved_max_user_id) {
                     maxUserId.value = data.resolved_max_user_id;
@@ -173,6 +181,7 @@ createApp({
         };
 
         const changeYear = async (yr) => {
+            yearPickedByUser.value = true;
             selectedYear.value = yr;
             formStart.value = `${yr}-07-01`;
             formEnd.value = `${yr}-07-14`;
