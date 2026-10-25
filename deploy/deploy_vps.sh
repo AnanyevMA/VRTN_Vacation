@@ -2,9 +2,9 @@
 # ==============================================================================
 # Скрипт развертывания сервиса Графика Отпусков на VPS 46.149.79.201
 # Прямая синхронизация с GitHub: https://github.com/AnanyevMA/VRTN_Vacation
-# Безопасное соседство с WB FBS (порт 8005, подпуть /vacation/)
+# Безопасное соседство с WB FBS (порт 8005, подпуть /vacation/, SSL Let's Encrypt)
 # Ультра-низкое потребление ресурсов (~40 МБ ОЗУ, лимит MemoryMax=192M)
-# Автоматическая проверка запуска, HTTP-эндпоинтов и логов systemd/Nginx
+# Автоматическая регистрация HTTPS-вебхука MAX и проверка логов systemd/Nginx
 # ==============================================================================
 
 set -euo pipefail
@@ -14,6 +14,7 @@ BRANCH="${BRANCH:-main}"
 APP_DIR="${APP_DIR:-/opt/vacation_planner}"
 SERVICE_NAME="vacation-planner"
 APP_PORT=8005
+SSL_DOMAIN="46.149.79.201.sslip.io"
 RUN_USER="${SUDO_USER:-$USER}"
 
 echo "=== 🚀 Развертывание Планировщика отпусков из GitHub ($REPO_URL [$BRANCH]) ==="
@@ -77,7 +78,7 @@ GOOGLE_SPREADSHEET_ID=
 
 # Окружение и CORS
 ENVIRONMENT=production
-CORS_ORIGINS=http://46.149.79.201,https://46.149.79.201
+CORS_ORIGINS=http://46.149.79.201,https://46.149.79.201,https://${SSL_DOMAIN},http://${SSL_DOMAIN}
 
 # Внутренний порт и префикс для совместной работы с WB FBS на 46.149.79.201
 HOST=127.0.0.1
@@ -130,22 +131,47 @@ sudo systemctl daemon-reload
 sudo systemctl enable "${SERVICE_NAME}"
 sudo systemctl restart "${SERVICE_NAME}"
 
-# 6. Автоматическая интеграция с Nginx (включая контейнер wbfbs_nginx)
-echo "[6/7] Проверка маршрутизации Nginx (/vacation/)..."
+# 6. Автоматическая интеграция с Nginx (SSL Let's Encrypt + контейнер wbfbs_nginx + авторегистрация вебхука MAX)
+echo "[6/7] Проверка маршрутизации Nginx (/vacation/) и SSL (${SSL_DOMAIN})..."
 WBFBS_NGINX_CONF="/PROJECTS/WB_FBS_VRTN/wb-fbs/nginx/conf.d/app.conf"
+SSL_CERT_FILE="/PROJECTS/WB_FBS_VRTN/wb-fbs/certbot/conf/live/${SSL_DOMAIN}/fullchain.pem"
+
 if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -q '^wbfbs_nginx$' && [ -f "$WBFBS_NGINX_CONF" ]; then
-    DOCKER_GW_IP=$(docker inspect wbfbs_nginx --format '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' | head -n 1)
-    DOCKER_GW_IP="${DOCKER_GW_IP:-172.20.0.1}"
-    if ! grep -q "location /vacation/" "$WBFBS_NGINX_CONF"; then
-        echo "Добавление блока /vacation/ в $WBFBS_NGINX_CONF (шлюз $DOCKER_GW_IP:${APP_PORT})..."
-        cp "$WBFBS_NGINX_CONF" "${WBFBS_NGINX_CONF}.bak"
-        python3 - "$WBFBS_NGINX_CONF" "$DOCKER_GW_IP" "$APP_PORT" <<'PYEOF'
-import sys, pathlib
-conf_path = pathlib.Path(sys.argv[1])
-gw_ip = sys.argv[2]
-port = sys.argv[3]
+    if [ ! -f "$SSL_CERT_FILE" ] && docker ps --format '{{.Names}}' | grep -q '^wbfbs_certbot$'; then
+        echo "Выпуск бесплатного SSL-сертификата Let's Encrypt для ${SSL_DOMAIN}..."
+        docker exec wbfbs_certbot certbot certonly --webroot -w /var/www/certbot -d "${SSL_DOMAIN}" --register-unsafely-without-email --agree-tos --non-interactive || true
+    fi
+
+    cat << 'PYEOF' > "$APP_DIR/deploy/ensure_nginx.py"
+import sys, pathlib, subprocess
+
+conf_path = pathlib.Path("/PROJECTS/WB_FBS_VRTN/wb-fbs/nginx/conf.d/app.conf")
+if not conf_path.exists():
+    sys.exit(0)
+
 content = conf_path.read_text(encoding="utf-8")
-vacation_block = f"""
+changed = False
+
+cert_file = pathlib.Path("/PROJECTS/WB_FBS_VRTN/wb-fbs/certbot/conf/live/46.149.79.201.sslip.io/fullchain.pem")
+if cert_file.exists() and "listen 443 ssl;" not in content:
+    ssl_block = """    listen 80;
+    listen 443 ssl;
+    http2 on;
+    ssl_certificate /etc/letsencrypt/live/46.149.79.201.sslip.io/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/46.149.79.201.sslip.io/privkey.pem;"""
+    content = content.replace("    listen 80;", ssl_block, 1)
+    changed = True
+
+if "location /vacation/" not in content:
+    try:
+        gw_ip = subprocess.check_output(
+            ["docker", "inspect", "wbfbs_nginx", "--format", "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}"],
+            text=True
+        ).strip().splitlines()[0] or "172.20.0.1"
+    except Exception:
+        gw_ip = "172.20.0.1"
+    port = "8005"
+    vacation_block = f"""
     # ==========================================================
     # СЕРВИС ПЛАНИРОВАНИЯ ОТПУСКОВ (Изолированный подпуть /vacation/)
     # ==========================================================
@@ -185,15 +211,64 @@ vacation_block = f"""
         add_header X-XSS-Protection "1; mode=block" always;
     }}
 """
-idx = content.rfind("}")
-if idx != -1:
-    new_content = content[:idx] + vacation_block + "\n}\n"
-    conf_path.write_text(new_content, encoding="utf-8")
+    idx = content.rfind("}")
+    if idx != -1:
+        content = content[:idx] + vacation_block + "\n}\n"
+        changed = True
+
+if changed:
+    conf_path.write_text(content, encoding="utf-8")
+    subprocess.run(["docker", "exec", "wbfbs_nginx", "nginx", "-t"], check=True)
+    subprocess.run(["docker", "exec", "wbfbs_nginx", "nginx", "-s", "reload"], check=True)
 PYEOF
-    fi
+
+    python3 "$APP_DIR/deploy/ensure_nginx.py"
     docker exec wbfbs_nginx nginx -t
     docker exec wbfbs_nginx nginx -s reload
-    echo "Конфигурация контейнера wbfbs_nginx успешно проверена и перезагружена."
+
+    # Авто-восстановление блока /vacation/ + SSL, если соседний деплой WB FBS перезапишет app.conf
+    sudo bash -c "cat <<EOF > /etc/systemd/system/vacation-nginx-sync.service
+[Unit]
+Description=Restore Vacation Planner Nginx block if app.conf is overwritten
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 $APP_DIR/deploy/ensure_nginx.py
+EOF"
+
+    sudo bash -c "cat <<EOF > /etc/systemd/system/vacation-nginx-sync.path
+[Unit]
+Description=Watch WB FBS Nginx app.conf for overwrites
+
+[Path]
+PathChanged=$WBFBS_NGINX_CONF
+
+[Install]
+WantedBy=multi-user.target
+EOF"
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now vacation-nginx-sync.path
+
+    if [ -f "$SSL_CERT_FILE" ]; then
+        "$APP_DIR/.venv/bin/python3" - "$APP_DIR" "$SSL_DOMAIN" <<'PYWH'
+import sys, pathlib
+app_dir = sys.argv[1]
+ssl_domain = sys.argv[2]
+sys.path.insert(0, app_dir)
+env = dict(l.split("=", 1) for l in pathlib.Path(f"{app_dir}/.env").read_text().splitlines() if "=" in l and not l.startswith("#"))
+bot_token = env.get("MAX_BOT_TOKEN", "").strip()
+wh_secret = env.get("WEBHOOK_SECRET", "").strip()
+api_url = env.get("MAX_API_URL", "https://platform-api.max.ru").strip() or "https://platform-api.max.ru"
+if bot_token and wh_secret:
+    from backend.services.max_bot_client import MaxBotClient
+    client = MaxBotClient(token=bot_token, base_url=api_url)
+    wh_url = f"https://{ssl_domain}/vacation/api/chat/webhook?token={wh_secret}"
+    ok = client.register_webhook(wh_url)
+    print(f"MAX Webhook registered (https://{ssl_domain}/vacation/api/chat/webhook?token=<REDACTED>): {ok}")
+PYWH
+    fi
+    echo "Конфигурация контейнера wbfbs_nginx и HTTPS вебхука успешно проверена."
 fi
 
 # 7. Проверка здоровья сервиса (Healthcheck) и анализ логов
@@ -228,10 +303,12 @@ STATS_JSON=$(curl -fsS "http://127.0.0.1:${APP_PORT}/api/export/stats")
 echo "--- Ответ внутреннего API (/api/export/stats) ---"
 echo "$STATS_JSON"
 
-if curl -fsS "http://127.0.0.1/vacation/api/export/stats" >/dev/null 2>&1; then
-    echo "--- Ответ внешнего Nginx (/vacation/api/export/stats) ---"
-    curl -fsS "http://127.0.0.1/vacation/api/export/stats"
+if curl -fsS "https://${SSL_DOMAIN}/vacation/api/export/stats" >/dev/null 2>&1; then
+    echo "--- Ответ внешнего HTTPS Nginx (https://${SSL_DOMAIN}/vacation/api/export/stats) ---"
+    curl -fsS "https://${SSL_DOMAIN}/vacation/api/export/stats"
     echo ""
 fi
 
-echo "=== ✅ Развертывание успешно завершено! Дашборд: http://46.149.79.201/vacation/ ==="
+echo "=== ✅ Развертывание успешно завершено! ==="
+echo "HTTP Дашборд:  http://46.149.79.201/vacation/"
+echo "HTTPS Дашборд: https://${SSL_DOMAIN}/vacation/"
