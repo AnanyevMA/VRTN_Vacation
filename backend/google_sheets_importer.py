@@ -180,15 +180,6 @@ def sync_real_employees_to_db(db: Session) -> Dict[str, Any]:
                 db.delete(old_emp)
     db.commit()
 
-    # Clean out seamstresses not in target_names (prevents duplicate / obsolete seamstress rows)
-    all_seamstresses = db.query(Employee).filter(Employee.role == "Швея (портной)").all()
-    for s_emp in all_seamstresses:
-        if s_emp.full_name not in target_names:
-            db.query(VacationSlot).filter(VacationSlot.employee_id == s_emp.id).delete()
-            db.query(EmployeeDraft).filter(EmployeeDraft.employee_id == s_emp.id).delete()
-            db.delete(s_emp)
-    db.commit()
-
     # Step 2: Deduplicate any rows sharing identical full_name
     for name in target_names:
         dups = db.query(Employee).filter(Employee.full_name == name).all()

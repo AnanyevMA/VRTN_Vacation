@@ -4,14 +4,92 @@ from backend.models import Department, JobRole, WorkShift, Employee, ScheduleRul
 from backend.google_sheets_importer import sync_real_employees_to_db
 
 
+def ensure_minimal_rules_if_empty():
+    """Ensures base solver rules exist in schedule_rules without seeding demo employees, shifts, or departments."""
+    migrate_db()
+    db = SessionLocal()
+    try:
+        if db.query(ScheduleRule).count() > 0:
+            ensure_default_rules(db)
+            return
+
+        roles = db.query(JobRole).all()
+        role_quotas = {r.name: r.default_quota for r in roles}
+        shifts = db.query(WorkShift).all()
+        shift_quotas = {s.name: getattr(s, "default_quota", 2) or 2 for s in shifts}
+
+        rules_data = [
+            {
+                "rule_key": "tk_rf_min_block",
+                "rule_type": "HARD",
+                "parameters": {"min_days": 14},
+                "description": "Минимум один неделимый период отпуска должен составлять не менее 14 календарных дней (ст. 125 ТК РФ).",
+                "is_active": True,
+            },
+            {
+                "rule_key": "max_concurrent_roles",
+                "rule_type": "HARD",
+                "parameters": {"quotas": role_quotas},
+                "description": "Квоты одновременных отсутствий сотрудников критических должностей швейного цеха.",
+                "is_active": True,
+            },
+            {
+                "rule_key": "blackout_periods",
+                "rule_type": "HARD",
+                "parameters": {"periods": []},
+                "description": "Блэкаут-периоды (запрет на отпуска в пиковые производственные сезоны).",
+                "is_active": True,
+            },
+            {
+                "rule_key": "soft_seniority_weight",
+                "rule_type": "SOFT",
+                "parameters": {"weight": 2.0},
+                "description": "Приоритет выбора дат сотрудниками с большим стажем работы.",
+                "is_active": True,
+            },
+            {
+                "rule_key": "soft_min_fragmentation",
+                "rule_type": "SOFT",
+                "parameters": {"min_recommended_days": 7, "penalty_score": 1.5},
+                "description": "Минимизация дробления отпуска на микро-периоды менее 7 дней.",
+                "is_active": True,
+            },
+            {
+                "rule_key": "max_concurrent_shifts",
+                "rule_type": "HARD",
+                "parameters": {"quotas": shift_quotas},
+                "description": "Квоты одновременных отпусков сотрудников одной смены.",
+                "is_active": True,
+            },
+            {
+                "rule_key": "incompatible_employee_groups",
+                "rule_type": "HARD",
+                "parameters": {"groups": []},
+                "description": "Группы сотрудников, чьи отпуска не должны пересекаться (взаимозаменяемые швеи и специалисты).",
+                "is_active": True,
+            },
+        ]
+        for r_data in rules_data:
+            db.add(ScheduleRule(**r_data))
+        db.commit()
+    finally:
+        db.close()
+
+
 def seed_database():
     migrate_db()
     db = SessionLocal()
 
-    if db.query(Department).count() > 0:
-        # Check if real employees are synced
+    has_existing_data = (
+        db.query(Department).count() > 0
+        or db.query(WorkShift).count() > 0
+        or db.query(JobRole).count() > 0
+        or db.query(Employee).count() > 0
+    )
+    if has_existing_data:
+        # Check if legacy test synthetic employees need replacement
         synth = db.query(Employee).filter(Employee.full_name == "Иванова Татьяна Сергеевна").first()
-        if synth or db.query(Employee).count() == 0:
+        if synth:
             sync_real_employees_to_db(db)
         ensure_default_rules(db)
         db.close()

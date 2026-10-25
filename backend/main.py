@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from backend.database import engine, Base, migrate_db
-from backend.seed_data import seed_database
+from backend.seed_data import seed_database, ensure_minimal_rules_if_empty
 from backend.api.auth_routes import router as auth_router
 from backend.api.employee_routes import router as employee_router
 from backend.api.department_routes import router as department_router
@@ -22,7 +22,12 @@ from backend.api.admin_routes import router as admin_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     migrate_db()
-    seed_database()
+    is_prod = os.getenv("ENVIRONMENT", "").strip().lower() == "production"
+    auto_seed = os.getenv("AUTO_SEED_DEMO", "false" if is_prod else "true").strip().lower()
+    if auto_seed in ("1", "true", "yes"):
+        seed_database()
+    else:
+        ensure_minimal_rules_if_empty()
     yield
 
 
