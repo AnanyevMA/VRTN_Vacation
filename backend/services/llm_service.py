@@ -44,7 +44,8 @@ def _ensure_env_loaded():
 _ensure_env_loaded()
 
 # Single lightweight Google AI Studio model (Free Tier)
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
+FALLBACK_MODELS = ("gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
@@ -121,7 +122,7 @@ class GeminiFlashService:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 160,
+                "maxOutputTokens": 256,
                 "responseMimeType": "application/json",
             },
         }
@@ -129,6 +130,15 @@ class GeminiFlashService:
         url = GEMINI_API_URL.format(model=self.model)
         headers = {"x-goog-api-key": self.api_key}
         resp = self._client.post(url, json=payload, headers=headers)
+        if resp.status_code == 404:
+            for alt_model in FALLBACK_MODELS:
+                if alt_model == self.model:
+                    continue
+                alt_url = GEMINI_API_URL.format(model=alt_model)
+                resp = self._client.post(alt_url, json=payload, headers=headers)
+                if resp.status_code == 200:
+                    self.model = alt_model
+                    break
         if resp.status_code != 200:
             logger.warning(f"Gemini model {self.model} returned status {resp.status_code}")
             return [], ""

@@ -63,7 +63,7 @@ if [ ! -f ".env" ]; then
     cat <<EOF > .env
 # Простая модель Google Gemini (Бесплатный тариф: https://aistudio.google.com/)
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-flash-lite-latest
 
 # Токен бота MAX Messenger
 MAX_BOT_TOKEN=
