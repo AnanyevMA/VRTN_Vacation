@@ -166,14 +166,24 @@ def extract_contact_from_webhook(raw_body: dict) -> Tuple[Optional[str], Optiona
         att_type = (att.get("type") or "").lower()
         if att_type in ("contact", "vcard", "phone"):
             att_uid = str(att.get("user_id") or att.get("userId") or "").strip() or None
+            for top_info_key in ("max_info", "tam_info", "user"):
+                top_info = att.get(top_info_key)
+                if isinstance(top_info, dict):
+                    top_uid = str(top_info.get("user_id") or top_info.get("userId") or top_info.get("id") or "").strip() or None
+                    if top_uid:
+                        att_uid = top_uid
+                        break
             payload_att = att.get("payload")
             if isinstance(payload_att, dict):
                 p_uid = str(payload_att.get("user_id") or payload_att.get("userId") or payload_att.get("id") or "").strip() or None
-                if isinstance(payload_att.get("tam_info"), dict):
-                    tam = payload_att["tam_info"]
-                    tam_uid = str(tam.get("user_id") or tam.get("userId") or tam.get("id") or "").strip() or None
-                    if tam.get("phone") or tam.get("phone_number"):
-                        return normalize_phone_number(str(tam.get("phone") or tam.get("phone_number"))), tam_uid or p_uid or att_uid
+                for info_key in ("max_info", "tam_info", "user"):
+                    info_obj = payload_att.get(info_key)
+                    if isinstance(info_obj, dict):
+                        info_uid = str(info_obj.get("user_id") or info_obj.get("userId") or info_obj.get("id") or "").strip() or None
+                        if info_uid:
+                            p_uid = info_uid
+                        if info_obj.get("phone") or info_obj.get("phone_number"):
+                            return normalize_phone_number(str(info_obj.get("phone") or info_obj.get("phone_number"))), p_uid or att_uid
                 if payload_att.get("phone"):
                     return normalize_phone_number(str(payload_att["phone"])), p_uid or att_uid
                 if payload_att.get("phone_number"):
@@ -513,6 +523,11 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
 
     # 3. Check if user is sending phone contact / auth
     if payload.phone:
+        if not contact_user_id and not is_test and payload.user_id:
+            msg_sender = raw_body.get("message", {}).get("sender") if isinstance(raw_body.get("message"), dict) else None
+            if isinstance(msg_sender, dict) and (msg_sender.get("first_name") or msg_sender.get("name")):
+                contact_user_id = str(payload.user_id).strip()
+
         # Positive verification: Contact is verified if and only if native contact
         # attachment provided contact_user_id matching the sender payload.user_id.
         is_verified_contact = bool(
@@ -572,6 +587,20 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
                     admin.max_user_id = payload.user_id
                 if chat_id:
                     admin.max_chat_id = chat_id
+                # Ensure admin also has a linked Employee profile so they can plan vacations
+                if not emp:
+                    emp = Employee(
+                        full_name=admin.full_name,
+                        phone=admin.phone,
+                        role=admin.role_title or "Мастер смены / цеха",
+                        department_id=1,
+                        shift="Пятидневка 5/2 (08:00-17:00)",
+                        total_vacation_days=36,
+                        bot_access="APPROVED",
+                        max_user_id=payload.user_id,
+                        max_chat_id=chat_id,
+                    )
+                    db.add(emp)
                 db.commit()
             else:
                 logger.warning(
