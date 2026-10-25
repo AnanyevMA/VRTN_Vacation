@@ -162,15 +162,30 @@ if cert_file.exists() and "listen 443 ssl;" not in content:
     content = content.replace("    listen 80;", ssl_block, 1)
     changed = True
 
+try:
+    gw_ip = subprocess.check_output(
+        ["docker", "inspect", "wbfbs_nginx", "--format", "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}"],
+        text=True
+    ).strip().splitlines()[0] or "172.20.0.1"
+except Exception:
+    gw_ip = "172.20.0.1"
+port = "8005"
+
+miniapp_block = f"""    location /vacation/miniapp {{
+        proxy_pass http://{gw_ip}:{port}/miniapp;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header X-Frame-Options;
+        add_header Content-Security-Policy "frame-ancestors 'self' https://*.max.ru https://max.ru https://*.oneme.ru" always;
+        add_header X-Content-Type-Options "nosniff" always;
+    }}
+
+"""
+
 if "location /vacation/" not in content:
-    try:
-        gw_ip = subprocess.check_output(
-            ["docker", "inspect", "wbfbs_nginx", "--format", "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}"],
-            text=True
-        ).strip().splitlines()[0] or "172.20.0.1"
-    except Exception:
-        gw_ip = "172.20.0.1"
-    port = "8005"
     vacation_block = f"""
     # ==========================================================
     # СЕРВИС ПЛАНИРОВАНИЯ ОТПУСКОВ (Изолированный подпуть /vacation/)
@@ -194,7 +209,7 @@ if "location /vacation/" not in content:
         proxy_connect_timeout 10s;
     }}
 
-    location /vacation/ {{
+{miniapp_block}    location /vacation/ {{
         proxy_pass http://{gw_ip}:{port}/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -215,6 +230,9 @@ if "location /vacation/" not in content:
     if idx != -1:
         content = content[:idx] + vacation_block + "\n}\n"
         changed = True
+elif "location /vacation/miniapp" not in content:
+    content = content.replace("    location /vacation/ {", miniapp_block + "    location /vacation/ {", 1)
+    changed = True
 
 if changed:
     conf_path.write_text(content, encoding="utf-8")

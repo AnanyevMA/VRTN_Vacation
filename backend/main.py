@@ -17,6 +17,7 @@ from backend.api.rule_routes import router as rule_router
 from backend.api.chat_routes import router as chat_router
 from backend.api.export_routes import router as export_router
 from backend.api.admin_routes import router as admin_router
+from backend.api.miniapp_routes import router as miniapp_router
 
 
 @asynccontextmanager
@@ -47,7 +48,10 @@ app = FastAPI(
 @app.middleware("http")
 async def add_security_headers(request, call_next):
     response = await call_next(request)
-    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    if request.url.path.endswith("/miniapp"):
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' https://*.max.ru https://max.ru https://*.oneme.ru"
+    else:
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
@@ -74,6 +78,7 @@ app.include_router(rule_router)
 app.include_router(chat_router)
 app.include_router(export_router)
 app.include_router(admin_router)
+app.include_router(miniapp_router)
 
 # Mount frontend static files
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
@@ -83,3 +88,8 @@ if os.path.exists(frontend_dir):
     @app.get("/")
     async def serve_index():
         return FileResponse(os.path.join(frontend_dir, "index.html"))
+
+    @app.get("/miniapp")
+    @app.get("/miniapp/")
+    async def serve_miniapp():
+        return FileResponse(os.path.join(frontend_dir, "miniapp.html"))

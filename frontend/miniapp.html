@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VRTN Отпуск | Мини-приложение MAX</title>
+    <!-- MAX WebApp Bridge SDK -->
+    <script src="https://st.max.ru/js/max-web-app.js"></script>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Vue 3 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        [v-cloak] { display: none; }
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            -webkit-tap-highlight-color: transparent;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans antialiased min-h-screen flex flex-col select-none">
+    <div id="miniapp" v-cloak class="flex-1 flex flex-col max-w-lg mx-auto w-full pb-20">
+        <!-- Top Compact Bar -->
+        <header class="bg-slate-900/95 backdrop-blur sticky top-0 z-30 px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+            <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow">
+                    <i data-lucide="calendar-heart" class="w-4 h-4 text-white"></i>
+                </div>
+                <div>
+                    <h1 class="text-sm font-bold text-white leading-tight">VRTN Отпуск</h1>
+                    <p class="text-[11px] text-slate-400">
+                        <span v-if="employee">{{ employee.full_name }}</span>
+                        <span v-else-if="isAdmin">Режим руководителя</span>
+                        <span v-else>Швейное производство</span>
+                    </p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-1.5">
+                <!-- Year Selector -->
+                <div class="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700 text-xs">
+                    <button @click="changeYear(2026)" :class="selectedYear === 2026 ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400'" class="px-2 py-1 rounded-md transition">2026</button>
+                    <button @click="changeYear(2027)" :class="selectedYear === 2027 ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400'" class="px-2 py-1 rounded-md transition">2027</button>
+                </div>
+                <button @click="loadContext()" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Обновить">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5" :class="{'animate-spin': loading}"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Toast / Alert Banner -->
+        <div v-if="statusBanner.text" class="mx-4 mt-3 p-3 rounded-xl border text-xs flex items-start justify-between gap-2"
+             :class="statusBanner.type === 'error' ? 'bg-rose-500/15 border-rose-500/40 text-rose-200' : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'">
+            <div class="whitespace-pre-line leading-relaxed">{{ statusBanner.text }}</div>
+            <button @click="statusBanner.text = ''" class="text-slate-400 hover:text-white font-bold">✕</button>
+        </div>
+
+        <!-- Profile Switcher if MAX SDK didn't pass user_id automatically -->
+        <div v-if="!employee && !isAdmin && !loading" class="p-4 space-y-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center gap-2 text-indigo-400 font-semibold text-sm">
+                    <i data-lucide="user-check" class="w-4 h-4"></i>
+                    <span>Выберите ваш профиль сотрудника</span>
+                </div>
+                <p class="text-xs text-slate-400 leading-relaxed">
+                    Если вы впервые открыли мини-приложение или запустили его вне мобильного клиента MAX, выберите себя из списка или отправьте контакт кнопкой в чате бота:
+                </p>
+                <div v-if="companySchedule.length > 0" class="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                    <button v-for="emp in companySchedule" :key="emp.employee_id"
+                            @click="selectEmployeeFallback(emp.employee_id)"
+                            class="w-full text-left p-2.5 rounded-xl bg-slate-800/80 hover:bg-indigo-600/20 border border-slate-700/70 hover:border-indigo-500/50 transition flex items-center justify-between">
+                        <div>
+                            <div class="text-xs font-semibold text-white">{{ emp.full_name }}</div>
+                            <div class="text-[11px] text-slate-400">{{ emp.role }} • {{ emp.shift }}</div>
+                        </div>
+                        <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 1: МОЙ ОТПУСК (EMPLOYEE PERSONAL CABINET) -->
+        <main v-if="activeTab === 'my' && employee" class="p-4 space-y-4">
+            <!-- Profile & Balance Card -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <span class="text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                            {{ employee.department_name }}
+                        </span>
+                        <h2 class="text-base font-bold text-white mt-1.5">{{ employee.full_name }}</h2>
+                        <p class="text-xs text-slate-400">{{ employee.role }} • {{ employee.shift }}</p>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-[11px] text-slate-400">Доступно</div>
+                        <div class="text-xl font-extrabold text-indigo-400">{{ employee.remaining_days }} <span class="text-xs font-normal text-slate-400">/ {{ employee.total_vacation_days }} дн.</span></div>
+                    </div>
+                </div>
+
+                <!-- Progress Bar -->
+                <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden flex">
+                    <div class="bg-emerald-500 h-full transition-all" :style="{ width: Math.min(100, (employee.scheduled_days / employee.total_vacation_days) * 100) + '%' }" title="В графике"></div>
+                    <div class="bg-amber-400 h-full transition-all" :style="{ width: Math.min(100, (employee.draft_days / employee.total_vacation_days) * 100) + '%' }" title="В черновике"></div>
+                </div>
+
+                <div class="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>В графике: <b class="text-emerald-400">{{ employee.scheduled_days }} дн.</b></span>
+                    <span>Черновик: <b class="text-amber-300">{{ employee.draft_days }} дн.</b></span>
+                    <span>Остаток: <b class="text-white">{{ employee.remaining_days }} дн.</b></span>
+                </div>
+
+                <!-- 14-day TK RF rule status -->
+                <div class="pt-2 border-t border-slate-800/80 flex items-center gap-2 text-xs"
+                     :class="employee.has_14_day_block ? 'text-emerald-400' : 'text-amber-300'">
+                    <i :data-lucide="employee.has_14_day_block ? 'check-circle-2' : 'alert-triangle'" class="w-4 h-4 flex-shrink-0"></i>
+                    <span v-if="employee.has_14_day_block">Ст. 125 ТК РФ соблюдена (есть непрерывный блок ≥ 14 дней)</span>
+                    <span v-else>Нужен минимум один непрерывный период от 14 календарных дней</span>
+                </div>
+            </div>
+
+            <!-- 152-FZ Consent Card (if not yet accepted) -->
+            <div v-if="!employee.consent_152fz" class="bg-indigo-950/50 border border-indigo-500/40 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center gap-2 text-indigo-300 font-bold text-xs">
+                    <i data-lucide="shield-check" class="w-4 h-4"></i>
+                    <span>Согласие на обработку персональных данных (152-ФЗ)</span>
+                </div>
+                <p class="text-xs text-slate-300 leading-relaxed">
+                    Для планирования и формирования графика отпусков (форма Т-7) подтвердите согласие на обработку ваших персональных данных (ФИО, должность, смена, даты отпуска).
+                </p>
+                <button @click="acceptConsent()" :disabled="submitting"
+                        class="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow transition">
+                    ✅ Согласна (Подтвердить 152-ФЗ)
+                </button>
+            </div>
+
+            <!-- Date Picker & CSP Validation Card -->
+            <div v-if="employee.consent_152fz" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                        <i data-lucide="calendar-plus" class="w-4 h-4 text-indigo-400"></i>
+                        Добавить период отпуска ({{ selectedYear }})
+                    </h3>
+                    <span v-if="computedSelectedDays > 0" class="text-xs font-bold px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300">
+                        {{ computedSelectedDays }} дн.
+                    </span>
+                </div>
+
+                <!-- Quick Duration Presets -->
+                <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="text-[11px] text-slate-400 mr-1">Быстрый выбор:</span>
+                    <button @click="applyDurationPreset(14)" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-[11px] text-indigo-300 font-medium transition">
+                        +14 дн. (основной)
+                    </button>
+                    <button @click="applyDurationPreset(11)" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-[11px] text-slate-300 font-medium transition">
+                        +11 дн.
+                    </button>
+                    <button @click="applyDurationPreset(7)" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-[11px] text-slate-300 font-medium transition">
+                        +7 дн.
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2.5">
+                    <div>
+                        <label class="block text-[11px] text-slate-400 mb-1">Дата начала:</label>
+                        <input type="date" v-model="formStart" @change="onStartDateChange"
+                               class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
+                    </div>
+                    <div>
+                        <label class="block text-[11px] text-slate-400 mb-1">Дата окончания:</label>
+                        <input type="date" v-model="formEnd"
+                               class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
+                    </div>
+                </div>
+
+                <!-- Blackout warning if any exist -->
+                <div v-if="blackouts.length > 0" class="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/70 text-[11px] text-slate-300 space-y-1">
+                    <div class="font-semibold text-amber-300 flex items-center gap-1">
+                        <i data-lucide="ban" class="w-3.5 h-3.5"></i>
+                        Периоды производственного запрета (блэкауты):
+                    </div>
+                    <div v-for="(b, idx) in blackouts" :key="idx" class="text-slate-400">
+                        • <b>{{ formatDateRu(b.start) }} – {{ formatDateRu(b.end) }}</b>: {{ b.name }}
+                    </div>
+                </div>
+
+                <button @click="addPeriodToDraft()" :disabled="submitting || !formStart || !formEnd"
+                        class="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow transition flex items-center justify-center gap-1.5">
+                    <i data-lucide="plus-circle" class="w-4 h-4"></i>
+                    <span>Проверить и добавить в черновик</span>
+                </button>
+
+                <!-- Top-3 Alternatives offered by CSP Solver on conflict -->
+                <div v-if="alternatives.length > 0" class="pt-3 border-t border-slate-800 space-y-2">
+                    <div class="text-xs font-bold text-amber-300">💡 Ближайшие свободные даты (Топ-3 от солвера):</div>
+                    <div v-for="alt in alternatives" :key="alt.option"
+                         class="p-2.5 rounded-xl bg-slate-800 border border-indigo-500/40 flex items-center justify-between gap-2">
+                        <div>
+                            <div class="text-xs font-bold text-white">Вариант {{ alt.option }}: {{ formatDateRu(alt.start) }} – {{ formatDateRu(alt.end) }}</div>
+                            <div class="text-[11px] text-slate-400">{{ alt.days }} дн. • {{ alt.reason }}</div>
+                        </div>
+                        <button @click="selectAlternative(alt)"
+                                class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold flex-shrink-0">
+                            Выбрать
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Current Draft Card -->
+            <div v-if="draftSlots.length > 0" class="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <i data-lucide="file-edit" class="w-4 h-4"></i>
+                        Черновик заявки ({{ draftSlots.length }})
+                    </h3>
+                    <button @click="clearDraft()" class="text-[11px] text-rose-400 hover:text-rose-300">Очистить всё</button>
+                </div>
+
+                <div class="space-y-2">
+                    <div v-for="(ds, idx) in draftSlots" :key="idx"
+                         class="p-2.5 rounded-xl bg-slate-800/90 border border-slate-700 flex items-center justify-between">
+                        <div>
+                            <div class="text-xs font-bold text-white">{{ formatDateRu(ds.start) }} – {{ formatDateRu(ds.end) }}</div>
+                            <div class="text-[11px] text-slate-400">
+                                {{ ds.days }} календ. дн.
+                                <span v-if="ds.days >= 14" class="text-emerald-400 font-medium">• Основной блок (≥14 дн.)</span>
+                            </div>
+                        </div>
+                        <button @click="removeDraftSlot(idx)" class="p-1.5 text-rose-400 hover:bg-rose-500/20 rounded-lg transition">
+                            ✕
+                        </button>
+                    </div>
+                </div>
+
+                <button @click="submitDraft()" :disabled="submitting"
+                        class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition flex items-center justify-center gap-2">
+                    <span>✅ Подтвердить и отправить руководителю</span>
+                </button>
+            </div>
+
+            <!-- My Submitted / Approved Vacation Slots -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                    <i data-lucide="calendar-check" class="w-4 h-4 text-emerald-400"></i>
+                    Мои периоды в графике ({{ selectedYear }})
+                </h3>
+
+                <div v-if="mySlots.length === 0" class="text-xs text-slate-500 py-3 text-center">
+                    У вас пока нет отправленных периодов на {{ selectedYear }} год.
+                </div>
+
+                <div v-else class="space-y-2">
+                    <div v-for="sl in mySlots" :key="sl.id"
+                         class="p-3 rounded-xl bg-slate-800/80 border border-slate-700/80 flex items-center justify-between">
+                        <div>
+                            <div class="text-xs font-bold text-white">{{ formatDateRu(sl.start_date) }} – {{ formatDateRu(sl.end_date) }}</div>
+                            <div class="text-[11px] text-slate-400">
+                                {{ sl.days_count }} дн.
+                                <span v-if="sl.is_primary_block" class="text-indigo-400">• Основной блок</span>
+                            </div>
+                        </div>
+                        <span class="px-2.5 py-1 rounded-full text-[11px] font-bold"
+                              :class="statusBadgeClass(sl.status)">
+                            {{ statusLabelRu(sl.status) }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- TAB 2: ОБЩИЙ ГРАФИК ОТПУСКОВ ВСЕХ СОТРУДНИКОВ -->
+        <main v-if="activeTab === 'all'" class="p-4 space-y-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-sm font-bold text-white flex items-center gap-2">
+                        <i data-lucide="users" class="w-4 h-4 text-indigo-400"></i>
+                        График отпусков фабрики ({{ selectedYear }})
+                    </h2>
+                    <span class="text-xs text-slate-400">{{ filteredCompanySchedule.length }} сотр.</span>
+                </div>
+
+                <!-- Filters: Search, Shift, Month -->
+                <div class="space-y-2">
+                    <input v-model="scheduleSearch" type="text" placeholder="Поиск по ФИО, должности или цеху..."
+                           class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
+
+                    <div class="grid grid-cols-2 gap-2">
+                        <select v-model="scheduleShiftFilter" class="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white">
+                            <option value="">Все смены</option>
+                            <option v-for="s in shifts" :key="s.id" :value="s.name">{{ s.name }}</option>
+                        </select>
+
+                        <select v-model="scheduleMonthFilter" class="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white">
+                            <option :value="0">Все месяцы {{ selectedYear }}</option>
+                            <option v-for="(mName, mIdx) in monthNames" :key="mIdx" :value="mIdx + 1">{{ mName }}</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Employees & Their Vacations List -->
+                <div class="space-y-2.5 pt-1">
+                    <div v-if="filteredCompanySchedule.length === 0" class="text-xs text-slate-500 py-6 text-center">
+                        По выбранным фильтрам сотрудников не найдено.
+                    </div>
+
+                    <div v-for="emp in filteredCompanySchedule" :key="emp.employee_id"
+                         class="p-3 rounded-xl bg-slate-800/80 border border-slate-700/80 space-y-2">
+                        <div class="flex items-start justify-between gap-2">
+                            <div>
+                                <div class="text-xs font-bold text-white flex items-center gap-1.5">
+                                    <span>{{ emp.full_name }}</span>
+                                    <span v-if="employee && emp.employee_id === employee.id" class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/30 text-indigo-300">Вы</span>
+                                </div>
+                                <div class="text-[11px] text-slate-400">{{ emp.role }} • {{ emp.department_name }} • {{ emp.shift }}</div>
+                            </div>
+                            <span class="text-[11px] font-semibold text-slate-300 flex-shrink-0">
+                                {{ emp.scheduled_days }} / {{ emp.total_vacation_days }} дн.
+                            </span>
+                        </div>
+
+                        <div v-if="emp.slots.length === 0" class="text-[11px] text-slate-500 italic">
+                            Даты отпуска на {{ selectedYear }} год еще не выбраны
+                        </div>
+
+                        <div v-else class="flex flex-wrap gap-1.5">
+                            <div v-for="sl in emp.slots" :key="sl.id"
+                                 class="px-2.5 py-1 rounded-lg text-[11px] border flex items-center gap-1.5"
+                                 :class="sl.status === 'APPROVED' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' : (sl.status === 'CONFLICT' ? 'bg-rose-500/15 border-rose-500/30 text-rose-300' : 'bg-amber-500/15 border-amber-500/30 text-amber-300')">
+                                <span class="font-semibold">{{ formatDateRu(sl.start_date) }} – {{ formatDateRu(sl.end_date) }}</span>
+                                <span class="opacity-75">({{ sl.days_count }} дн.)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- TAB 3: ПУЛЬТ РУКОВОДИТЕЛЯ (ADMIN PANEL) -->
+        <main v-if="activeTab === 'admin' && isAdmin && adminData" class="p-4 space-y-4">
+            <!-- KPI Summary Cards -->
+            <div class="grid grid-cols-2 gap-2.5">
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                    <div class="text-[11px] text-slate-400">Подали график</div>
+                    <div class="text-lg font-extrabold text-white mt-0.5">
+                        {{ adminData.stats.submitted_count }} / {{ adminData.stats.total_employees }}
+                        <span class="text-xs font-normal text-indigo-400">({{ adminData.stats.submission_rate_percent }}%)</span>
+                    </div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                    <div class="text-[11px] text-slate-400">Ждут решения / Конфликты</div>
+                    <div class="text-lg font-extrabold mt-0.5">
+                        <span class="text-amber-400">{{ adminData.stats.pending_slots_count }}</span>
+                        <span class="text-slate-600 mx-1">/</span>
+                        <span class="text-rose-400">{{ adminData.stats.conflict_slots_count }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pending Approvals Queue -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <div class="flex items-center justify-between gap-2">
+                    <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                        <i data-lucide="inbox" class="w-4 h-4 text-amber-400"></i>
+                        Заявки на согласование ({{ adminData.pending_slots.length }})
+                    </h3>
+                    <button v-if="adminData.pending_slots.length > 0" @click="runBatchApprove()" :disabled="submitting"
+                            class="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold transition">
+                        ⚡ Авто-согласование
+                    </button>
+                </div>
+
+                <div v-if="adminData.pending_slots.length === 0" class="text-xs text-slate-500 py-4 text-center">
+                    🎉 Все поданные заявки на {{ selectedYear }} год рассмотрены!
+                </div>
+
+                <div v-else class="space-y-2.5">
+                    <div v-for="item in adminData.pending_slots" :key="item.slot_id"
+                         class="p-3 rounded-xl bg-slate-800/90 border border-slate-700 space-y-2.5">
+                        <div class="flex items-start justify-between">
+                            <div>
+                                <div class="text-xs font-bold text-white">{{ item.full_name }}</div>
+                                <div class="text-[11px] text-slate-400">{{ item.role }} • {{ item.shift }}</div>
+                            </div>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold" :class="statusBadgeClass(item.status)">
+                                {{ statusLabelRu(item.status) }}
+                            </span>
+                        </div>
+
+                        <div class="text-xs font-semibold text-indigo-300 bg-slate-900/70 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
+                            📅 {{ formatDateRu(item.start_date) }} – {{ formatDateRu(item.end_date) }} ({{ item.days_count }} дн.)
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <button @click="handleSlotAction(item.slot_id, 'APPROVE')" :disabled="submitting"
+                                    class="py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition">
+                                ✅ Утвердить
+                            </button>
+                            <button @click="handleSlotAction(item.slot_id, 'REJECT')" :disabled="submitting"
+                                    class="py-2 rounded-xl bg-rose-600/80 hover:bg-rose-600 text-white text-xs font-bold transition">
+                                ❌ Отклонить
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Employee Bot Access Moderation -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                    <i data-lucide="shield" class="w-4 h-4 text-indigo-400"></i>
+                    Доступ сотрудников к боту MAX
+                </h3>
+
+                <div class="space-y-2">
+                    <div v-for="emp in adminData.employees_access" :key="emp.id"
+                         class="p-2.5 rounded-xl bg-slate-800/70 border border-slate-700/70 flex items-center justify-between gap-2">
+                        <div>
+                            <div class="text-xs font-bold text-white">{{ emp.full_name }}</div>
+                            <div class="text-[11px] text-slate-400">{{ emp.role }} • {{ emp.shift }}</div>
+                        </div>
+                        <select :value="emp.bot_access" @change="updateBotAccess(emp.id, $event.target.value)"
+                                class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] font-semibold"
+                                :class="emp.bot_access === 'APPROVED' ? 'text-emerald-400' : (emp.bot_access === 'BLOCKED' ? 'text-rose-400' : 'text-amber-300')">
+                            <option value="APPROVED">✅ Одобрен</option>
+                            <option value="PENDING">⏳ Ждет</option>
+                            <option value="BLOCKED">🚫 Блок</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Bottom Navigation Bar -->
+        <nav class="fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur border-t border-slate-800 z-40">
+            <div class="max-w-lg mx-auto grid" :class="isAdmin ? 'grid-cols-3' : 'grid-cols-2'">
+                <button @click="activeTab = 'my'"
+                        :class="activeTab === 'my' ? 'text-indigo-400 border-t-2 border-indigo-500 bg-indigo-500/5' : 'text-slate-400'"
+                        class="py-2.5 flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition">
+                    <i data-lucide="user" class="w-4 h-4"></i>
+                    <span>Мой отпуск</span>
+                </button>
+
+                <button @click="activeTab = 'all'"
+                        :class="activeTab === 'all' ? 'text-indigo-400 border-t-2 border-indigo-500 bg-indigo-500/5' : 'text-slate-400'"
+                        class="py-2.5 flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition">
+                    <i data-lucide="calendar-range" class="w-4 h-4"></i>
+                    <span>Отпуска всех</span>
+                </button>
+
+                <button v-if="isAdmin" @click="activeTab = 'admin'"
+                        :class="activeTab === 'admin' ? 'text-amber-400 border-t-2 border-amber-500 bg-amber-500/5' : 'text-slate-400'"
+                        class="py-2.5 flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition relative">
+                    <i data-lucide="crown" class="w-4 h-4"></i>
+                    <span>Руководитель</span>
+                    <span v-if="adminData && adminData.pending_slots.length > 0"
+                          class="absolute top-1.5 right-6 w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[10px] font-extrabold flex items-center justify-center">
+                        {{ adminData.pending_slots.length }}
+                    </span>
+                </button>
+            </div>
+        </nav>
+    </div>
+
+    <script>
+        window.__APP_BASE__ = window.location.pathname.replace(/\/miniapp\/?$/, '');
+        const s = document.createElement('script');
+        s.src = (window.__APP_BASE__ || '') + '/static/miniapp.js';
+        document.body.appendChild(s);
+    </script>
+</body>
+</html>
