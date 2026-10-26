@@ -102,18 +102,28 @@ class MaxBotClient:
                 if isinstance(item, list):
                     row = []
                     for btn in item:
-                        row.append({
+                        b_type = btn.get("type", "callback")
+                        b_dict = {
                             "text": btn.get("text", ""),
-                            "type": btn.get("type", "callback"),
-                            "payload": btn.get("callback_data", btn.get("payload", "")),
-                        })
+                            "type": b_type,
+                        }
+                        if b_type == "link":
+                            b_dict["url"] = btn.get("url", "")
+                        else:
+                            b_dict["payload"] = btn.get("callback_data", btn.get("payload", ""))
+                        row.append(b_dict)
                     buttons_rows.append(row)
                 else:
-                    buttons_rows.append([{
+                    b_type = item.get("type", "callback")
+                    b_dict = {
                         "text": item.get("text", ""),
-                        "type": item.get("type", "callback"),
-                        "payload": item.get("callback_data", item.get("payload", "")),
-                    }])
+                        "type": b_type,
+                    }
+                    if b_type == "link":
+                        b_dict["url"] = item.get("url", "")
+                    else:
+                        b_dict["payload"] = item.get("callback_data", item.get("payload", ""))
+                    buttons_rows.append([b_dict])
             payload["attachments"] = [
                 {
                     "type": "inline_keyboard",

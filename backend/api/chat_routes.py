@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _rate_limit_history: Dict[str, List[float]] = {}
 RATE_LIMIT_WINDOW = 60.0  # seconds
 RATE_LIMIT_MAX_REQUESTS = 10
+MINIAPP_URL = os.getenv("MINIAPP_URL", "https://46.149.79.201.sslip.io/vacation/miniapp")
 
 
 def check_rate_limit(key: str) -> bool:
@@ -612,9 +613,11 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
                 f"Вы авторизованы как администратор бота ({admin.role_title}).\n\n"
                 f"Команды:\n"
                 f"• Напишите «/admin» для просмотра списка сотрудников.\n"
-                f"• Или напишите даты отпуска для планирования графика (например: «с 1 по 14 июля 2026»)."
+                f"• Или напишите даты отпуска для планирования графика (например: «с 1 по 14 июля 2026»).\n"
+                f"• Или откройте мини-приложение кнопкой ниже."
             )
-            max_bot_client.send_message(payload.user_id, reply_text, chat_id=chat_id)
+            admin_buttons = [{"type": "link", "text": "📱 График и заявки (Мини-приложение)", "url": MINIAPP_URL}]
+            max_bot_client.send_message(payload.user_id, reply_text, [admin_buttons], chat_id=chat_id)
             if not is_test:
                 return {"status": "ok"}
             return {"status": "ok", "recipient_user_id": payload.user_id, "text": reply_text}
@@ -629,8 +632,9 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
                 return {"status": "ok"}
             return {"status": "ok", "recipient_user_id": payload.user_id, "text": msg}
 
-        reply_text = auth_res["message"] + f"\n\nВаш доступный баланс: {auth_res['total_days']} дней.\nНапишите желаемые даты отпуска."
-        max_bot_client.send_message(payload.user_id, reply_text, chat_id=chat_id)
+        reply_text = auth_res["message"] + f"\n\nВаш доступный баланс: {auth_res['total_days']} дней.\nНапишите желаемые даты отпуска или откройте мини-приложение."
+        emp_buttons = [{"type": "link", "text": "📱 График отпусков (Мини-приложение)", "url": MINIAPP_URL}]
+        max_bot_client.send_message(payload.user_id, reply_text, [emp_buttons], chat_id=chat_id)
         if not is_test:
             return {"status": "ok"}
         return {"status": "ok", "recipient_user_id": payload.user_id, "text": reply_text}
@@ -745,6 +749,9 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
     elif p.get("show_confirm_buttons"):
         inline_buttons.append({"text": "✅ Подтвердить отправку", "callback_data": "подтверждаю"})
         inline_buttons.append({"text": "🔄 Сброс", "callback_data": "сброс"})
+
+    if p.get("action") != "CONSENT_REQUEST":
+        inline_buttons.append({"type": "link", "text": "📱 График отпусков (Mini App)", "url": MINIAPP_URL})
 
     reply_text = response["text"]
     if admin and p.get("action") == "GREETING" and "👑" not in reply_text:

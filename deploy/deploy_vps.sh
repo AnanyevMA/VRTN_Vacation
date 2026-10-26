@@ -179,7 +179,7 @@ miniapp_block = f"""    location /vacation/miniapp {{
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_hide_header X-Frame-Options;
-        add_header Content-Security-Policy "frame-ancestors 'self' https://*.max.ru https://max.ru https://*.oneme.ru" always;
+        add_header Content-Security-Policy "frame-ancestors *" always;
         add_header X-Content-Type-Options "nosniff" always;
     }}
 
@@ -232,6 +232,14 @@ if "location /vacation/" not in content:
         changed = True
 elif "location /vacation/miniapp" not in content:
     content = content.replace("    location /vacation/ {", miniapp_block + "    location /vacation/ {", 1)
+    changed = True
+elif "frame-ancestors *" not in content:
+    import re
+    content = re.sub(
+        r'location /vacation/miniapp\s*\{[^}]*\}',
+        miniapp_block.strip(),
+        content
+    )
     changed = True
 
 if changed:

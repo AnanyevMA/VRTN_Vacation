@@ -48,20 +48,27 @@ app = FastAPI(
 @app.middleware("http")
 async def add_security_headers(request, call_next):
     response = await call_next(request)
-    if request.url.path.endswith("/miniapp"):
-        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' https://*.max.ru https://max.ru https://*.oneme.ru"
+    path = request.url.path
+    if path.startswith("/miniapp") or "/miniapp" in path or path.startswith("/static/miniapp"):
+        if "X-Frame-Options" in response.headers:
+            del response.headers["X-Frame-Options"]
+        response.headers["Content-Security-Policy"] = "frame-ancestors *"
     else:
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
 
-raw_cors = os.getenv("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,http://46.149.79.201")
+raw_cors = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:8000,http://127.0.0.1:8000,http://46.149.79.201,https://46.149.79.201.sslip.io,https://max.ru,https://web.max.ru",
+)
 cors_origins = [o.strip() for o in raw_cors.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=r"^https://([a-zA-Z0-9-]+\.)*(max\.ru|oneme\.ru)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -89,7 +96,7 @@ if os.path.exists(frontend_dir):
     async def serve_index():
         return FileResponse(os.path.join(frontend_dir, "index.html"))
 
-    @app.get("/miniapp")
-    @app.get("/miniapp/")
+    @app.api_route("/miniapp", methods=["GET", "HEAD"])
+    @app.api_route("/miniapp/", methods=["GET", "HEAD"])
     async def serve_miniapp():
         return FileResponse(os.path.join(frontend_dir, "miniapp.html"))
