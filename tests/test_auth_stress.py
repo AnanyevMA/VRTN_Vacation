@@ -38,7 +38,7 @@ ADMIN_ENDPOINTS = [
     ("GET", "/api/export/excel", None),
 ]
 
-PUBLIC_READ_ENDPOINTS = [
+DASHBOARD_READ_ENDPOINTS = [
     "/api/employees",
     "/api/rules",
     "/api/vacations",
@@ -185,24 +185,26 @@ def test_timing_attack_verification_oracle(monkeypatch):
         )
 
 
-def test_public_routes_remain_accessible_under_admin_lock(monkeypatch):
-    """When ADMIN_API_KEY is configured, public read endpoints and chat endpoints must not be blocked."""
+def test_read_routes_require_token_under_admin_lock(monkeypatch):
+    """When ADMIN_API_KEY is configured, dashboard reads need the token; phone verification stays public."""
     secret = "locked-down-key"
     monkeypatch.setenv("ADMIN_API_KEY", secret)
+    auth = {"X-Admin-Token": secret}
 
-    for path in PUBLIC_READ_ENDPOINTS:
-        res = client.get(path)
-        assert res.status_code == 200, f"Public endpoint {path} was blocked: {res.status_code}"
+    for path in DASHBOARD_READ_ENDPOINTS:
+        assert client.get(path).status_code == 401, f"Endpoint {path} is open without a token"
+        res = client.get(path, headers=auth)
+        assert res.status_code == 200, f"Endpoint {path} rejected a valid token: {res.status_code}"
 
     # Verify phone endpoint (public)
     res = client.post("/api/auth/verify_phone", json={"phone": "+79130000001"})
     assert res.status_code == 200
 
-    # Verify chat history (public)
-    emps = client.get("/api/employees").json()
+    # Chat history holds personal data
+    emps = client.get("/api/employees", headers=auth).json()
     emp_id = emps[0]["id"]
-    res = client.get(f"/api/chat/history/{emp_id}")
-    assert res.status_code == 200
+    assert client.get(f"/api/chat/history/{emp_id}").status_code == 401
+    assert client.get(f"/api/chat/history/{emp_id}", headers=auth).status_code == 200
 
 
 def test_permissive_mode_matrix(monkeypatch):

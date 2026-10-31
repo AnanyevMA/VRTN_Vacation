@@ -27,7 +27,7 @@ def sanitize_row(row):
     return [sanitize_formula_injection(cell) for cell in row]
 
 
-router = APIRouter(prefix="/api/export", tags=["Exports & Dashboard Analytics"])
+router = APIRouter(prefix="/api/export", tags=["Exports & Dashboard Analytics"], dependencies=[Depends(require_admin)])
 
 
 @router.get("/stats")

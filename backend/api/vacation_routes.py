@@ -15,7 +15,7 @@ from backend.agents.solver_agent import SolverAgent
 from backend.solver.optimizer import VacationOptimizer
 from backend.auth import require_admin
 
-router = APIRouter(prefix="/api/vacations", tags=["Vacation Slots & Scheduling"])
+router = APIRouter(prefix="/api/vacations", tags=["Vacation Slots & Scheduling"], dependencies=[Depends(require_admin)])
 
 
 @router.get("", response_model=List[VacationSlotOut])

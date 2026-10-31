@@ -9,7 +9,7 @@ from backend.schemas import EmployeeCreate, EmployeeUpdate, EmployeeOut
 from backend.agents.manager_agent import ManagerAgent
 from backend.auth import require_admin
 
-router = APIRouter(prefix="/api/employees", tags=["Employee Management"])
+router = APIRouter(prefix="/api/employees", tags=["Employee Management"], dependencies=[Depends(require_admin)])
 
 
 @router.get("", response_model=List[EmployeeOut])

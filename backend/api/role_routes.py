@@ -2,11 +2,12 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.auth import require_admin
 from backend.database import get_db
 from backend.models import JobRole, Department, Employee, ScheduleRule
 from backend.schemas import JobRoleCreate, JobRoleUpdate, JobRoleOut
 
-router = APIRouter(prefix="/api/roles", tags=["Job Roles & Quotas Management"])
+router = APIRouter(prefix="/api/roles", tags=["Job Roles & Quotas Management"], dependencies=[Depends(require_admin)])
 
 
 def _sync_schedule_rule_quotas(db: Session):

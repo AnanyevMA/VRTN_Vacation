@@ -76,6 +76,7 @@ const app = createApp({
             }
             adminAuthError.value = '';
             showAdminModal.value = false;
+            if (cleanToken) fetchAllData();
             nextTick(() => {
                 if (window.lucide) window.lucide.createIcons();
             });
@@ -119,6 +120,12 @@ const app = createApp({
             return res;
         };
         window.adminFetch = adminFetch;
+
+        const adminJson = async (url) => {
+            const res = await adminFetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
+            return res.json();
+        };
 
         const downloadExport = async (format) => {
             try {
@@ -164,15 +171,15 @@ const app = createApp({
         const fetchAllData = async () => {
             try {
                 const [empRes, deptRes, rolesRes, shiftsRes, vacRes, rulesRes, statsRes, botAdminsRes, incompRes] = await Promise.all([
-                    fetch('api/employees').then(r => r.json()),
-                    fetch('api/departments').then(r => r.json()),
-                    fetch('api/roles').then(r => r.json()),
-                    fetch('api/shifts').then(r => r.json()),
-                    fetch(`api/vacations?year=${selectedYear.value}`).then(r => r.json()),
-                    fetch('api/rules').then(r => r.json()),
-                    fetch('api/export/stats').then(r => r.json()),
-                    fetch('api/bot-admins').then(r => r.json()),
-                    fetch('api/rules/incompatible-groups').then(r => r.json()),
+                    adminJson('api/employees'),
+                    adminJson('api/departments'),
+                    adminJson('api/roles'),
+                    adminJson('api/shifts'),
+                    adminJson(`api/vacations?year=${selectedYear.value}`),
+                    adminJson('api/rules'),
+                    adminJson('api/export/stats'),
+                    adminJson('api/bot-admins'),
+                    adminJson('api/rules/incompatible-groups'),
                 ]);
 
                 employees.value = empRes;
@@ -221,7 +228,7 @@ const app = createApp({
         const loadChatHistory = async (empId) => {
             if (!empId) return;
             try {
-                const res = await fetch(`api/chat/history/${empId}`).then(r => r.json());
+                const res = await adminJson(`api/chat/history/${empId}`);
                 chatMessages.value = res;
             } catch (e) {
                 console.error('Error loading chat history:', e);
@@ -250,11 +257,13 @@ const app = createApp({
 
             isTyping.value = true;
             try {
-                const res = await fetch('api/chat/message', {
+                const httpRes = await adminFetch('api/chat/message', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ employee_id: selectedEmployeeId.value, message: text })
-                }).then(r => r.json());
+                });
+                if (!httpRes.ok) throw new Error(`HTTP ${httpRes.status}: api/chat/message`);
+                const res = await httpRes.json();
 
                 isTyping.value = false;
                 chatMessages.value.push({
@@ -289,7 +298,8 @@ const app = createApp({
 
         const clearChat = async () => {
             if (!selectedEmployeeId.value) return;
-            await fetch(`api/chat/reset/${selectedEmployeeId.value}`, { method: 'POST' });
+            const res = await adminFetch(`api/chat/reset/${selectedEmployeeId.value}`, { method: 'POST' });
+            if (!res.ok) return;
             chatMessages.value = [];
             await loadChatHistory(selectedEmployeeId.value);
         };
@@ -488,8 +498,9 @@ const app = createApp({
         onMounted(() => {
             fetchAllData();
             setInterval(() => {
-                if (document.hidden) return;
-                fetch('api/export/stats').then(r => r.json()).then(res => {
+                // Skip while the key dialog is open: a 401 here would reset the key being typed
+                if (document.hidden || showAdminModal.value) return;
+                adminJson('api/export/stats').then(res => {
                     stats.value = res;
                 }).catch(() => {});
             }, 30000);

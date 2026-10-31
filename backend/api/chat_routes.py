@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from backend.auth import require_admin
 from backend.database import get_db
 from backend.models import Employee, ChatMessage, BotAdmin, EmployeeDraft
 from backend.schemas import ChatMessageIn, ChatMessageOut, MaxWebhookPayload
@@ -232,7 +233,7 @@ def extract_phone_from_webhook(raw_body: dict) -> Optional[str]:
 router = APIRouter(prefix="/api/chat", tags=["MAX Messenger Chat & Webhook"])
 
 
-@router.post("/message")
+@router.post("/message", dependencies=[Depends(require_admin)])
 def send_chat_message(msg_in: ChatMessageIn, db: Session = Depends(get_db)):
     """
     Sends message from employee to Intake & Negotiation Agent.
@@ -247,7 +248,7 @@ def send_chat_message(msg_in: ChatMessageIn, db: Session = Depends(get_db)):
     return response
 
 
-@router.get("/history/{employee_id}", response_model=List[ChatMessageOut])
+@router.get("/history/{employee_id}", response_model=List[ChatMessageOut], dependencies=[Depends(require_admin)])
 def get_chat_history(employee_id: int, db: Session = Depends(get_db)):
     messages = (
         db.query(ChatMessage)
@@ -282,7 +283,7 @@ def get_chat_history(employee_id: int, db: Session = Depends(get_db)):
     return messages
 
 
-@router.post("/reset/{employee_id}")
+@router.post("/reset/{employee_id}", dependencies=[Depends(require_admin)])
 def reset_chat_history(employee_id: int, db: Session = Depends(get_db)):
     db.query(ChatMessage).filter(ChatMessage.employee_id == employee_id).delete()
     draft = db.query(EmployeeDraft).filter(EmployeeDraft.employee_id == employee_id).first()

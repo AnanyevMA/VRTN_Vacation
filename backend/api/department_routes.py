@@ -2,11 +2,12 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.auth import require_admin
 from backend.database import get_db
 from backend.models import Department, Employee
 from backend.schemas import DepartmentCreate, DepartmentUpdate, DepartmentOut
 
-router = APIRouter(prefix="/api/departments", tags=["Departments Management"])
+router = APIRouter(prefix="/api/departments", tags=["Departments Management"], dependencies=[Depends(require_admin)])
 
 
 @router.get("", response_model=List[DepartmentOut])

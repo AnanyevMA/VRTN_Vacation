@@ -17,7 +17,7 @@ from backend.schemas import (
 from backend.agents.manager_agent import ManagerAgent
 from backend.auth import require_admin
 
-router = APIRouter(prefix="/api/rules", tags=["Schedule Rules Engine"])
+router = APIRouter(prefix="/api/rules", tags=["Schedule Rules Engine"], dependencies=[Depends(require_admin)])
 
 
 @router.get("", response_model=List[ScheduleRuleOut])

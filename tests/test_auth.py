@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -89,7 +92,7 @@ def test_admin_auth_endpoints_enforcement(monkeypatch):
     assert r.status_code == 200
 
     # PUT /api/rules/{id}/toggle
-    rules = client.get("/api/rules").json()
+    rules = client.get("/api/rules", headers={"X-Admin-Token": secret}).json()
     rule_id = rules[0]["id"]
     r = client.put(f"/api/rules/{rule_id}/toggle")
     assert r.status_code == 401
@@ -98,7 +101,7 @@ def test_admin_auth_endpoints_enforcement(monkeypatch):
     assert r.status_code == 200
 
     # POST /api/rules/incompatible-groups
-    emps = client.get("/api/employees").json()
+    emps = client.get("/api/employees", headers={"X-Admin-Token": secret}).json()
     group_payload = {
         "name": "Тестовая группа непересечения",
         "employee_ids": [emps[0]["id"], emps[1]["id"]],
@@ -128,7 +131,7 @@ def test_admin_auth_endpoints_enforcement(monkeypatch):
     assert r.status_code == 200
 
     # PUT /api/vacations/{id}/status & DELETE
-    vacs = client.get("/api/vacations?year=2026").json()
+    vacs = client.get("/api/vacations?year=2026", headers={"X-Admin-Token": secret}).json()
     if vacs:
         slot_id = vacs[0]["id"]
         r = client.put(f"/api/vacations/{slot_id}/status?status=APPROVED")
@@ -186,14 +189,78 @@ def test_admin_auth_endpoints_enforcement(monkeypatch):
     r = client.get(f"/api/export/excel?token={secret}")
     assert r.status_code == 200
 
-    # 6. Public read endpoints remain accessible without tokens
-    assert client.get("/api/employees").status_code == 200
-    assert client.get("/api/rules").status_code == 200
-    assert client.get("/api/vacations").status_code == 200
-    assert client.get("/api/export/stats").status_code == 200
-    assert client.get("/api/departments").status_code == 200
-    assert client.get("/api/roles").status_code == 200
-    assert client.get("/api/shifts").status_code == 200
+    # 6. Dashboard read endpoints require the token and work with it
+    for path in (
+        "/api/employees", "/api/rules", "/api/vacations", "/api/export/stats",
+        "/api/departments", "/api/roles", "/api/shifts", "/api/bot-admins",
+        "/api/rules/incompatible-groups", f"/api/chat/history/{emp_id}",
+    ):
+        assert client.get(path).status_code == 401, path
+        assert client.get(path, headers={"X-Admin-Token": secret}).status_code == 200, path
+
+
+# Routes that stay reachable without X-Admin-Token: the Mini App, the MAX webhook
+# with its own WEBHOOK_SECRET, and phone verification.
+PUBLIC_API_PREFIXES = ("/api/miniapp/", "/api/chat/webhook", "/api/auth/verify_phone")
+
+
+def _api_routes():
+    # The OpenAPI schema flattens included routers; app.routes keeps them nested
+    for path, operations in app.openapi()["paths"].items():
+        if path.startswith("/api/"):
+            for method in operations:
+                yield method.upper(), path
+
+
+def test_every_api_route_is_closed_unless_listed_as_public(monkeypatch):
+    """Walks every documented route, so a route added later cannot stay open by accident."""
+    monkeypatch.setenv("ADMIN_API_KEY", "test-super-secret-admin-key")
+    checked = 0
+    for method, path in _api_routes():
+        if path.startswith(PUBLIC_API_PREFIXES):
+            continue
+        url = re.sub(r"\{[^}]+\}", "1", path)
+        r = client.request(method, url)
+        assert r.status_code == 401, f"{method} {path} answered {r.status_code} without a token"
+        checked += 1
+    assert checked > 30
+
+
+def test_public_routes_do_not_ask_for_admin_token(monkeypatch):
+    monkeypatch.setenv("ADMIN_API_KEY", "test-super-secret-admin-key")
+    monkeypatch.delenv("WEBHOOK_SECRET", raising=False)
+
+    r = client.get("/api/miniapp/context", params={"max_user_id": "unknown-user"})
+    assert r.status_code == 200
+
+    r = client.post("/api/auth/verify_phone", json={"phone": "+79990000000"})
+    assert r.status_code != 401
+
+    r = client.get("/api/chat/webhook")
+    assert r.status_code != 401
+
+
+def test_webhook_keeps_its_own_secret(monkeypatch):
+    monkeypatch.setenv("ADMIN_API_KEY", "test-super-secret-admin-key")
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+
+    r = client.post("/api/chat/webhook", json={"update_type": "message_created"})
+    assert r.status_code in (401, 403)
+    assert r.json().get("detail") != "Неверный или отсутствующий ключ администратора"
+
+
+def test_miniapp_admin_action_rejects_unknown_user(monkeypatch):
+    monkeypatch.setenv("ADMIN_API_KEY", "test-super-secret-admin-key")
+    r = client.post("/api/miniapp/admin/batch-approve", json={"max_user_id": "unknown-user"})
+    assert r.status_code == 401
+
+
+def test_frontend_dashboard_does_not_call_closed_routes_with_plain_fetch():
+    """A plain fetch() would get 401 forever: the dashboard must go through adminFetch."""
+    root = Path(__file__).resolve().parents[1] / "frontend"
+    plain_fetch = re.compile(r"(?<![\w.])fetch\(\s*[`'\"]api/")
+    for path in [root / "app.js", *sorted((root / "components").glob("*.js"))]:
+        assert not plain_fetch.search(path.read_text(encoding="utf-8")), path.name
 
 
 def test_admin_auth_permissive_when_unset(monkeypatch):

@@ -25,7 +25,7 @@
    * Группы непересечения сотрудников (`incompatible_employee_groups`): взаимозаменяемые сотрудницы не могут уходить в отпуск одновременно.
    * Блэкаут-периоды (`blackout_periods`): пик пошива школьной формы (15–31 августа), сезонные коллекции, годовая инвентаризация.
 4. **Безопасность API, 152-ФЗ и бота MAX:**
-   * **Административная защита (`require_admin` в `backend/auth.py`):** все мутирующие эндпоинты (`POST`/`PUT`/`DELETE` сотрудников, цехов, ролей, смен, слотов, правил, админов) и выгрузки (`/api/export/csv`, `/api/export/excel`) проверяют заголовок `X-Admin-Token` или `?token=` против `ADMIN_API_KEY` (`secrets.compare_digest`). На фронтенде используется обертка `adminFetch()`.
+   * **Административная защита (`require_admin` в `backend/auth.py`):** все эндпоинты дашборда, включая чтение (сотрудники, цеха, роли, смены, слоты, правила, админы, выгрузки, веб-симулятор чата), кроме `/api/miniapp/*`, `/api/chat/webhook*` и `/api/auth/verify_phone`, проверяют заголовок `X-Admin-Token` или `?token=` против `ADMIN_API_KEY` (`secrets.compare_digest`). На фронтенде используется обертка `adminFetch()`.
    * **Защита вебхука MAX (`/api/chat/webhook`):**
      * Проверка секрета `WEBHOOK_SECRET` (заголовок `X-Max-Bot-Token` или `?token=`).
      * In-memory Sliding Window Rate Limiter (`check_rate_limit`): не более **10 запросов в минуту** на `user_id` или IP (`X-Forwarded-For` / `X-Real-IP`).

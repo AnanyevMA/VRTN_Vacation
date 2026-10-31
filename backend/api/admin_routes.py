@@ -7,7 +7,7 @@ from backend.models import BotAdmin
 from backend.schemas import BotAdminCreate, BotAdminUpdate, BotAdminOut
 from backend.auth import require_admin
 
-router = APIRouter(prefix="/api/bot-admins", tags=["MAX Bot Administrators"])
+router = APIRouter(prefix="/api/bot-admins", tags=["MAX Bot Administrators"], dependencies=[Depends(require_admin)])
 
 
 @router.get("", response_model=List[BotAdminOut])
