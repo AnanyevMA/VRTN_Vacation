@@ -123,7 +123,7 @@ def get_miniapp_context(
     admin = _check_is_admin(db, uid, x_admin_token)
 
     if year is None:
-        # Auto-select year where employee or company has planned slots (default 2026)
+        # Auto-select year where employee or company has planned slots or active draft (default 2026)
         year = 2026
         if employee:
             emp_slot = (
@@ -134,6 +134,10 @@ def get_miniapp_context(
             )
             if emp_slot and emp_slot.start_date.year in (2026, 2027):
                 year = emp_slot.start_date.year
+            else:
+                emp_draft = db.query(EmployeeDraft).filter(EmployeeDraft.employee_id == employee.id).first()
+                if emp_draft and emp_draft.status != "COMMITTED" and emp_draft.target_year in (2026, 2027):
+                    year = emp_draft.target_year
         else:
             any_slot = db.query(VacationSlot).order_by(VacationSlot.start_date.desc()).first()
             if any_slot and any_slot.start_date.year in (2026, 2027):

@@ -404,6 +404,7 @@ createApp({
         const recallSubmittedSlots = async (slotId = null) => {
             if (!maxUserId.value) return;
             submitting.value = true;
+            yearPickedByUser.value = true;
             try {
                 const res = await fetch(`${API_BASE}/slots/recall`, {
                     method: 'POST',
