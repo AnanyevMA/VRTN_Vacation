@@ -4,32 +4,35 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>VRTN Отпуск | Мини-приложение MAX</title>
-    <!-- MAX WebApp Bridge SDK -->
-    <script src="https://st.max.ru/js/max-web-app.js"></script>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- MAX WebApp Bridge SDK (non-blocking async load) -->
+    <script src="https://st.max.ru/js/max-web-app.js" async></script>
+    <!-- Self-Hosted Tailwind CSS, Vue 3, and Lucide Icons (instant load without external CDN blocks) -->
     <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        brand: {
-                            500: '#6366f1',
-                            600: '#4f46e5',
-                            700: '#4338ca',
+        window.__APP_BASE__ = window.location.pathname.replace(/\/miniapp\/?$/, '');
+    </script>
+    <script src="/vacation/static/vendor/tailwind.js" onerror="this.src=(window.__APP_BASE__||'')+'/static/vendor/tailwind.js'"></script>
+    <script>
+        if (window.tailwind) {
+            tailwind.config = {
+                darkMode: 'class',
+                theme: {
+                    extend: {
+                        colors: {
+                            brand: {
+                                500: '#6366f1',
+                                600: '#4f46e5',
+                                700: '#4338ca',
+                            }
                         }
                     }
                 }
-            }
+            };
         }
     </script>
-    <!-- Vue 3 CDN -->
-    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="/vacation/static/vendor/vue.global.prod.js" onerror="this.src=(window.__APP_BASE__||'')+'/static/vendor/vue.global.prod.js'"></script>
+    <script src="/vacation/static/vendor/lucide.min.js" onerror="this.src=(window.__APP_BASE__||'')+'/static/vendor/lucide.min.js'"></script>
     <style>
-        [v-cloak] { display: none; }
+        [v-cloak] { display: none !important; }
         body {
             background-color: #0f172a;
             color: #f8fafc;
@@ -526,11 +529,6 @@
         </nav>
     </div>
 
-    <script>
-        window.__APP_BASE__ = window.location.pathname.replace(/\/miniapp\/?$/, '');
-        const s = document.createElement('script');
-        s.src = (window.__APP_BASE__ || '') + '/static/miniapp.js';
-        document.body.appendChild(s);
-    </script>
+    <script src="/vacation/static/miniapp.js" onerror="this.src=(window.__APP_BASE__||'')+'/static/miniapp.js'"></script>
 </body>
 </html>

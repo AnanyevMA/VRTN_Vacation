@@ -4,32 +4,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>График Отпусков | Швейная Фабрика (MAX Messenger + Manager Dashboard)</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Self-Hosted Tailwind CSS, Vue 3, and Lucide Icons -->
+    <script src="static/vendor/tailwind.js"></script>
     <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        brand: {
-                            50: '#eef2ff',
-                            100: '#e0e7ff',
-                            500: '#6366f1',
-                            600: '#4f46e5',
-                            700: '#4338ca',
-                            800: '#3730a3',
-                            900: '#312e81',
+        if (window.tailwind) {
+            tailwind.config = {
+                darkMode: 'class',
+                theme: {
+                    extend: {
+                        colors: {
+                            brand: {
+                                50: '#eef2ff',
+                                100: '#e0e7ff',
+                                500: '#6366f1',
+                                600: '#4f46e5',
+                                700: '#4338ca',
+                                800: '#3730a3',
+                                900: '#312e81',
+                            }
                         }
                     }
                 }
-            }
+            };
         }
     </script>
-    <!-- Vue 3 CDN -->
-    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="static/vendor/vue.global.prod.js"></script>
+    <script src="static/vendor/lucide.min.js"></script>
     <!-- Custom CSS -->
     <link rel="stylesheet" href="static/style.css">
 </head>

@@ -488,6 +488,14 @@ createApp({
         watch(activeTab, () => refreshIcons());
 
         onMounted(() => {
+            try {
+                if (window.WebApp && typeof window.WebApp.ready === 'function') {
+                    window.WebApp.ready();
+                }
+                if (window.Telegram && window.Telegram.WebApp && typeof window.Telegram.WebApp.ready === 'function') {
+                    window.Telegram.WebApp.ready();
+                }
+            } catch (_) {}
             loadContext();
         });
 
