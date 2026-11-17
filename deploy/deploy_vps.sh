@@ -299,9 +299,10 @@ fi
 
 # 7. Проверка здоровья сервиса (Healthcheck) и анализ логов
 echo "[7/7] Проверка работоспособности сервиса и анализ логов..."
+ADMIN_TOKEN=$(grep -E '^ADMIN_API_KEY=' "$APP_DIR/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || true)
 HTTP_OK=0
 for i in $(seq 1 15); do
-    if curl -fsS "http://127.0.0.1:${APP_PORT}/api/export/stats" >/dev/null 2>&1; then
+    if curl -fsS -H "X-Admin-Token: ${ADMIN_TOKEN}" "http://127.0.0.1:${APP_PORT}/api/export/stats" >/dev/null 2>&1; then
         HTTP_OK=1
         break
     fi
@@ -325,13 +326,13 @@ if echo "$LOGS" | grep -Eqi "Traceback|CRITICAL|SyntaxError|ImportError"; then
     exit 1
 fi
 
-STATS_JSON=$(curl -fsS "http://127.0.0.1:${APP_PORT}/api/export/stats")
+STATS_JSON=$(curl -fsS -H "X-Admin-Token: ${ADMIN_TOKEN}" "http://127.0.0.1:${APP_PORT}/api/export/stats")
 echo "--- Ответ внутреннего API (/api/export/stats) ---"
 echo "$STATS_JSON"
 
-if curl -fsS "https://${SSL_DOMAIN}/vacation/api/export/stats" >/dev/null 2>&1; then
+if curl -fsS -H "X-Admin-Token: ${ADMIN_TOKEN}" "https://${SSL_DOMAIN}/vacation/api/export/stats" >/dev/null 2>&1; then
     echo "--- Ответ внешнего HTTPS Nginx (https://${SSL_DOMAIN}/vacation/api/export/stats) ---"
-    curl -fsS "https://${SSL_DOMAIN}/vacation/api/export/stats"
+    curl -fsS -H "X-Admin-Token: ${ADMIN_TOKEN}" "https://${SSL_DOMAIN}/vacation/api/export/stats"
     echo ""
 fi
 
