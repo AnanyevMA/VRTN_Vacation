@@ -1,6 +1,15 @@
 window.RulesView = {
-    props: ['roles', 'roleQuotas', 'blackoutsList', 'shifts', 'shiftQuotas', 'employees', 'incompatibleGroups'],
-    emits: ['save-role-quotas', 'add-blackout', 'remove-blackout', 'save-shift-quotas', 'add-incompatible-group', 'delete-incompatible-group'],
+    props: ['roles', 'roleQuotas', 'blackoutsList', 'shifts', 'shiftQuotas', 'employees', 'incompatibleGroups', 'incompatiblePairs'],
+    emits: [
+        'save-role-quotas',
+        'add-blackout',
+        'remove-blackout',
+        'save-shift-quotas',
+        'add-incompatible-group',
+        'delete-incompatible-group',
+        'add-incompatible-pair',
+        'delete-incompatible-pair'
+    ],
     data() {
         return {
             newBlackout: { name: '', start: '', end: '' },
@@ -10,7 +19,13 @@ window.RulesView = {
                 max_concurrent: 1,
                 reason: '',
             },
+            newPair: {
+                employee_a_id: '',
+                employee_b_id: '',
+                reason: '',
+            },
             empSearch: '',
+            pairFilterSearch: '',
         };
     },
     computed: {
@@ -22,6 +37,16 @@ window.RulesView = {
                 (e.full_name && e.full_name.toLowerCase().includes(q)) ||
                 (e.role && e.role.toLowerCase().includes(q)) ||
                 (e.shift && e.shift.toLowerCase().includes(q))
+            );
+        },
+        filteredPairs() {
+            if (!this.incompatiblePairs) return [];
+            if (!this.pairFilterSearch.trim()) return this.incompatiblePairs;
+            const q = this.pairFilterSearch.toLowerCase();
+            return this.incompatiblePairs.filter(p =>
+                (p.employee_a_name && p.employee_a_name.toLowerCase().includes(q)) ||
+                (p.employee_b_name && p.employee_b_name.toLowerCase().includes(q)) ||
+                (p.reason && p.reason.toLowerCase().includes(q))
             );
         }
     },
@@ -57,6 +82,26 @@ window.RulesView = {
                 reason: '',
             };
             this.empSearch = '';
+        },
+        handleAddIncompatiblePair() {
+            const aId = Number(this.newPair.employee_a_id);
+            const bId = Number(this.newPair.employee_b_id);
+            if (!aId || !bId) {
+                return alert('Выберите обоих сотрудников для создания персонального запрета пересечения');
+            }
+            if (aId === bId) {
+                return alert('Нельзя выбрать одного и того же сотрудника дважды');
+            }
+            this.$emit('add-incompatible-pair', {
+                employee_a_id: aId,
+                employee_b_id: bId,
+                reason: this.newPair.reason.trim() || 'Персональный запрет пересечения (напарники)',
+            });
+            this.newPair = {
+                employee_a_id: '',
+                employee_b_id: '',
+                reason: '',
+            };
         },
         handleAddBlackout() {
             if (!this.newBlackout.name || !this.newBlackout.start || !this.newBlackout.end) {
@@ -246,6 +291,108 @@ window.RulesView = {
 
                     <button @click="handleAddIncompatibleGroup" class="w-full bg-rose-600 hover:bg-rose-500 text-white font-medium py-2 rounded-xl text-xs transition mt-2">
                         Создать группу непересечения
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ROW 2.5: Personal 1-on-1 Incompatible Employee Pairs -->
+        <div class="bg-slate-800/90 p-5 rounded-2xl border border-slate-700/70 shadow space-y-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-700 pb-3">
+                <div>
+                    <h3 class="font-bold text-white text-base flex items-center gap-2">
+                        <i data-lucide="git-compare" class="w-5 h-5 text-fuchsia-400"></i>
+                        Персональные запреты пересечения («Кто с кем не может пересекаться»)
+                    </h3>
+                    <p class="text-xs text-slate-400">Индивидуальные пары напарниц и сменщиц (1-на-1), которым запрещено уходить в отпуск одновременно</p>
+                </div>
+                <span class="text-[11px] bg-fuchsia-950/60 text-fuchsia-300 px-2.5 py-1 rounded-lg border border-fuchsia-800/50 self-start sm:self-auto">
+                    HARD-ограничение CSP
+                </span>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Left: Active Personal Pairs List -->
+                <div class="space-y-3">
+                    <div class="text-xs font-semibold text-slate-300 flex items-center justify-between gap-2">
+                        <span>Персональные связки ({{ incompatiblePairs ? incompatiblePairs.length : 0 }}):</span>
+                        <input
+                            v-if="incompatiblePairs && incompatiblePairs.length > 2"
+                            v-model="pairFilterSearch"
+                            placeholder="Фильтр по ФИО..."
+                            class="bg-slate-900 border border-slate-700 rounded px-2 py-0.5 text-[11px] text-slate-200 w-40"
+                        />
+                    </div>
+
+                    <div class="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                        <div v-for="p in filteredPairs" :key="p.id" class="bg-slate-900/70 p-3 rounded-xl border border-slate-800 text-xs flex items-center justify-between gap-3">
+                            <div class="space-y-1.5 flex-1 min-w-0">
+                                <div class="flex flex-wrap items-center gap-1.5">
+                                    <span class="bg-slate-800 text-slate-100 font-semibold px-2.5 py-1 rounded-lg border border-slate-700 text-[11px]">
+                                        👤 {{ p.employee_a_name }}
+                                        <span v-if="p.employee_a_role" class="text-[10px] text-slate-400 font-normal">({{ p.employee_a_role }})</span>
+                                    </span>
+                                    <span class="text-fuchsia-400 font-bold px-1 text-xs" title="Запрещено пересечение отпусков">⚡ не пересекается с ⚡</span>
+                                    <span class="bg-slate-800 text-slate-100 font-semibold px-2.5 py-1 rounded-lg border border-slate-700 text-[11px]">
+                                        👤 {{ p.employee_b_name }}
+                                        <span v-if="p.employee_b_role" class="text-[10px] text-slate-400 font-normal">({{ p.employee_b_role }})</span>
+                                    </span>
+                                </div>
+                                <div class="text-[11px] text-slate-400 italic">
+                                    Причина: {{ p.reason || 'Персональный запрет пересечения (напарники)' }}
+                                </div>
+                            </div>
+                            <button @click="$emit('delete-incompatible-pair', p.id)" class="text-rose-400 hover:text-rose-300 p-1.5 rounded-lg hover:bg-slate-800 transition shrink-0" title="Удалить связку">
+                                <i data-lucide="trash" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+
+                        <div v-if="!incompatiblePairs || !incompatiblePairs.length" class="text-xs text-slate-500 italic p-6 text-center bg-slate-900/40 rounded-xl border border-dashed border-slate-800">
+                            Персональные пары еще не указаны. Выберите двух сотрудников справа, чтобы запретить пересечение их отпусков.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Form to Add Personal 1-on-1 Pair -->
+                <div class="bg-slate-900/90 p-4 rounded-xl border border-slate-700/60 space-y-3 text-xs">
+                    <div class="font-bold text-slate-200 text-sm flex items-center justify-between">
+                        <span>Добавить персональный запрет (1-на-1):</span>
+                        <span class="text-fuchsia-400 text-[11px]">Взаимное исключение</span>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div class="space-y-1">
+                            <label class="text-[11px] text-slate-400">Первый сотрудник:</label>
+                            <select v-model="newPair.employee_a_id" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-200 text-xs">
+                                <option value="">— Выберите сотрудника —</option>
+                                <option v-for="emp in employees" :key="'pa-' + emp.id" :value="emp.id" :disabled="Number(newPair.employee_b_id) === emp.id">
+                                    {{ emp.full_name }} ({{ emp.role }})
+                                </option>
+                            </select>
+                        </div>
+
+                        <div class="space-y-1">
+                            <label class="text-[11px] text-slate-400">Не может пересекаться с:</label>
+                            <select v-model="newPair.employee_b_id" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-200 text-xs">
+                                <option value="">— Выберите напарника —</option>
+                                <option v-for="emp in employees" :key="'pb-' + emp.id" :value="emp.id" :disabled="Number(newPair.employee_a_id) === emp.id">
+                                    {{ emp.full_name }} ({{ emp.role }})
+                                </option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1">
+                        <label class="text-[11px] text-slate-400">Причина / комментарий (необязательно):</label>
+                        <input
+                            v-model="newPair.reason"
+                            placeholder="Напр., Сменщицы на одной спецмашине / Единственные закройщики смены"
+                            class="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 text-xs"
+                        />
+                    </div>
+
+                    <button @click="handleAddIncompatiblePair" class="w-full bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-medium py-2 rounded-xl text-xs transition mt-1">
+                        Добавить персональный запрет пересечения
                     </button>
                 </div>
             </div>

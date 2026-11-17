@@ -35,6 +35,7 @@ const app = createApp({
         const shiftQuotas = ref({});
         const blackoutsList = ref([]);
         const incompatibleGroups = ref([]);
+        const incompatiblePairs = ref([]);
 
         // Chat state
         const selectedEmployeeId = ref(null);
@@ -170,7 +171,7 @@ const app = createApp({
         // --- Data Fetching ---
         const fetchAllData = async () => {
             try {
-                const [empRes, deptRes, rolesRes, shiftsRes, vacRes, rulesRes, statsRes, botAdminsRes, incompRes] = await Promise.all([
+                const [empRes, deptRes, rolesRes, shiftsRes, vacRes, rulesRes, statsRes, botAdminsRes, incompRes, pairsRes] = await Promise.all([
                     adminJson('api/employees'),
                     adminJson('api/departments'),
                     adminJson('api/roles'),
@@ -180,6 +181,7 @@ const app = createApp({
                     adminJson('api/export/stats'),
                     adminJson('api/bot-admins'),
                     adminJson('api/rules/incompatible-groups'),
+                    adminJson('api/rules/incompatible-pairs'),
                 ]);
 
                 employees.value = empRes;
@@ -191,6 +193,7 @@ const app = createApp({
                 stats.value = statsRes;
                 botAdmins.value = botAdminsRes;
                 incompatibleGroups.value = incompRes;
+                incompatiblePairs.value = pairsRes;
 
                 // Sync quotas directly from unified JobRole table
                 const newQuotas = {};
@@ -475,6 +478,30 @@ const app = createApp({
             fetchAllData();
         };
 
+        const addIncompatiblePair = async (pairData) => {
+            const res = await adminFetch('api/rules/incompatible-pairs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(pairData)
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                return alert(err.detail || 'Ошибка создания персонального запрета пересечения');
+            }
+            alert('Персональный запрет пересечения успешно добавлен!');
+            fetchAllData();
+        };
+
+        const deleteIncompatiblePair = async (pairId) => {
+            if (!confirm('Удалить этот персональный запрет пересечения сотрудников?')) return;
+            const res = await adminFetch(`api/rules/incompatible-pairs/${pairId}`, { method: 'DELETE' });
+            if (!res.ok) {
+                const err = await res.json();
+                return alert(err.detail || 'Ошибка удаления персонального запрета');
+            }
+            fetchAllData();
+        };
+
         const formatDateRu = (dStr) => {
             if (!dStr) return '';
             return new Date(dStr).toLocaleDateString('ru-RU');
@@ -550,9 +577,12 @@ const app = createApp({
             removeBlackout,
             shiftQuotas,
             incompatibleGroups,
+            incompatiblePairs,
             saveShiftQuotas,
             addIncompatibleGroup,
             deleteIncompatibleGroup,
+            addIncompatiblePair,
+            deleteIncompatiblePair,
             formatDateRu,
             isSyncing,
             syncGoogleSheets,

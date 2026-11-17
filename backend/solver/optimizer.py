@@ -126,6 +126,15 @@ class VacationOptimizer:
                     f"Период {st.strftime('%d.%m.%Y')} – {en.strftime('%d.%m.%Y')} пересекается с отпуском участников группы непересечения «{group_name}» ({c_names}). Причина: «{reason}»"
                 )
 
+            # Check Personal Incompatible Pairs
+            pair_conflict = self._check_personal_pairs_violation(employee, st, en)
+            if pair_conflict:
+                partner_name = pair_conflict["partner_name"]
+                reason = pair_conflict["reason"]
+                conflicts.append(
+                    f"Период {st.strftime('%d.%m.%Y')} – {en.strftime('%d.%m.%Y')} пересекается с отпуском сотрудника «{partner_name}» (персональный запрет пересечения: «{reason}»)"
+                )
+
         if not conflicts:
             return {
                 "status": "VALID",
@@ -303,6 +312,49 @@ class VacationOptimizer:
 
         return None
 
+    def _get_personal_pairs(self, employee_id: int) -> List[Dict[str, Any]]:
+        rule = self.rules_by_key.get("personal_incompatible_pairs")
+        if not rule or not rule.is_active:
+            return []
+        pairs = rule.parameters.get("pairs", [])
+        return [
+            p for p in pairs
+            if p.get("employee_a_id") == employee_id or p.get("employee_b_id") == employee_id
+        ]
+
+    def _check_personal_pairs_violation(
+        self, employee: Employee, start: date, end: date, exclude_slot_id: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        pairs = self._get_personal_pairs(employee.id)
+        if not pairs:
+            return None
+
+        for pair in pairs:
+            emp_a = pair.get("employee_a_id")
+            emp_b = pair.get("employee_b_id")
+            partner_id = emp_b if emp_a == employee.id else emp_a
+            if not partner_id or partner_id == employee.id:
+                continue
+
+            partner_slots = [
+                s for s in self._active_slots
+                if s.employee_id == partner_id
+                and s.status in ("APPROVED", "REQUESTED")
+                and s.start_date <= end
+                and s.end_date >= start
+                and (exclude_slot_id is None or s.id != exclude_slot_id)
+            ]
+            if partner_slots:
+                partner_obj = self._active_employees.get(partner_id)
+                partner_name = partner_obj.full_name if partner_obj else f"Сотрудник #{partner_id}"
+                return {
+                    "partner_id": partner_id,
+                    "partner_name": partner_name,
+                    "reason": pair.get("reason") or "Персональный запрет пересечения",
+                }
+
+        return None
+
     def _get_first_conflict_reason(self, employee: Employee, start: date, end: date) -> Optional[str]:
         b_name = self._check_blackout_intersection(start, end)
         if b_name:
@@ -314,6 +366,9 @@ class VacationOptimizer:
         incomp = self._check_incompatible_groups_violation(employee, start, end)
         if incomp:
             return f"Пересечение в группе «{incomp['group_name']}» ({', '.join(incomp['conflicting_names'])})"
+        pair_incomp = self._check_personal_pairs_violation(employee, start, end)
+        if pair_incomp:
+            return f"Персональный запрет пересечения с «{pair_incomp['partner_name']}» ({pair_incomp['reason']})"
         return None
 
     def is_slot_valid(self, employee: Employee, start: date, end: date) -> bool:

@@ -35,27 +35,33 @@
             color: #f8fafc;
             -webkit-tap-highlight-color: transparent;
         }
+        details > summary { list-style: none; }
+        details > summary::-webkit-details-marker { display: none; }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans antialiased min-h-screen flex flex-col select-none">
     <div id="miniapp" v-cloak class="flex-1 flex flex-col max-w-lg mx-auto w-full pb-20">
         <!-- Top Compact Bar -->
         <header class="bg-slate-900/95 backdrop-blur sticky top-0 z-30 px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-            <div class="flex items-center gap-2.5">
-                <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow">
+            <div class="flex items-center gap-2.5 min-w-0">
+                <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow shrink-0">
                     <i data-lucide="calendar-heart" class="w-4 h-4 text-white"></i>
                 </div>
-                <div>
-                    <h1 class="text-sm font-bold text-white leading-tight">VRTN Отпуск</h1>
-                    <p class="text-[11px] text-slate-400">
+                <div class="min-w-0">
+                    <h1 class="text-sm font-bold text-white leading-tight truncate">
                         <span v-if="employee">{{ employee.full_name }}</span>
-                        <span v-else-if="isAdmin">Режим руководителя</span>
+                        <span v-else-if="isAdmin && adminData">{{ adminData.admin_name || 'Руководитель' }}</span>
+                        <span v-else>VRTN Отпуск</span>
+                    </h1>
+                    <p class="text-[11px] text-slate-400 truncate">
+                        <span v-if="employee">{{ employee.role }} • {{ employee.shift }}</span>
+                        <span v-else-if="isAdmin">Пульт согласования отпусков</span>
                         <span v-else>Швейное производство</span>
                     </p>
                 </div>
             </div>
 
-            <div class="flex items-center gap-1.5">
+            <div class="flex items-center gap-1.5 shrink-0">
                 <!-- Year Selector -->
                 <div class="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700 text-xs">
                     <button @click="changeYear(2026)" :class="selectedYear === 2026 ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400'" class="px-2 py-1 rounded-md transition">2026</button>
@@ -79,12 +85,12 @@
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
                 <div class="flex items-center gap-2 text-indigo-400 font-semibold text-sm">
                     <i data-lucide="user-check" class="w-4 h-4"></i>
-                    <span>Выберите ваш профиль сотрудника</span>
+                    <span>Выберите ваш профиль</span>
                 </div>
                 <p class="text-xs text-slate-400 leading-relaxed">
-                    Если вы впервые открыли мини-приложение или запустили его вне мобильного клиента MAX, выберите себя из списка или отправьте контакт кнопкой в чате бота:
+                    Выберите себя из списка сотрудников или отправьте контакт кнопкой в чате бота MAX:
                 </p>
-                <div v-if="companySchedule.length > 0" class="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                <div v-if="companySchedule.length > 0" class="space-y-1.5 max-h-72 overflow-y-auto pr-1">
                     <button v-for="emp in companySchedule" :key="emp.employee_id"
                             @click="selectEmployeeFallback(emp.employee_id)"
                             class="w-full text-left p-2.5 rounded-xl bg-slate-800/80 hover:bg-indigo-600/20 border border-slate-700/70 hover:border-indigo-500/50 transition flex items-center justify-between">
@@ -98,53 +104,70 @@
             </div>
         </div>
 
-        <!-- TAB 1: МОЙ ОТПУСК (EMPLOYEE PERSONAL CABINET) -->
-        <main v-if="activeTab === 'my' && employee" class="p-4 space-y-4">
-            <!-- Profile & Balance Card -->
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg">
-                <div class="flex items-start justify-between">
+        <!-- TAB 1: МОЙ ОТПУСК (EMPLOYEE / SHIFT LEAD PERSONAL CABINET) -->
+        <main v-if="activeTab === 'my' && employee" class="p-4 space-y-3.5">
+            <!-- STEP 1: Compact Balance Card -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 shadow">
+                <div class="flex items-center justify-between gap-2">
                     <div>
                         <span class="text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
                             {{ employee.department_name }}
                         </span>
-                        <h2 class="text-base font-bold text-white mt-1.5">{{ employee.full_name }}</h2>
-                        <p class="text-xs text-slate-400">{{ employee.role }} • {{ employee.shift }}</p>
+                        <div class="text-xs text-slate-400 mt-1.5">
+                            В графике: <b class="text-emerald-400">{{ employee.scheduled_days }} дн.</b>
+                            <span v-if="employee.draft_days > 0"> • Черновик: <b class="text-amber-300">{{ employee.draft_days }} дн.</b></span>
+                        </div>
                     </div>
                     <div class="text-right">
-                        <div class="text-[11px] text-slate-400">Доступно</div>
-                        <div class="text-xl font-extrabold text-indigo-400">{{ employee.remaining_days }} <span class="text-xs font-normal text-slate-400">/ {{ employee.total_vacation_days }} дн.</span></div>
+                        <div class="text-[11px] text-slate-400">Осталось выбрать</div>
+                        <div class="text-2xl font-extrabold" :class="employee.remaining_days === 0 ? 'text-emerald-400' : 'text-indigo-400'">
+                            {{ employee.remaining_days }}
+                            <span class="text-xs font-normal text-slate-400">из {{ employee.total_vacation_days }} дн.</span>
+                        </div>
                     </div>
                 </div>
 
                 <!-- Progress Bar -->
-                <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden flex">
-                    <div class="bg-emerald-500 h-full transition-all" :style="{ width: Math.min(100, (employee.scheduled_days / employee.total_vacation_days) * 100) + '%' }" title="В графике"></div>
-                    <div class="bg-amber-400 h-full transition-all" :style="{ width: Math.min(100, (employee.draft_days / employee.total_vacation_days) * 100) + '%' }" title="В черновике"></div>
+                <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden flex">
+                    <div class="bg-emerald-500 h-full transition-all" :style="{ width: Math.min(100, (employee.scheduled_days / employee.total_vacation_days) * 100) + '%' }"></div>
+                    <div class="bg-amber-400 h-full transition-all" :style="{ width: Math.min(100, (employee.draft_days / employee.total_vacation_days) * 100) + '%' }"></div>
                 </div>
 
-                <div class="flex items-center justify-between text-[11px] text-slate-400">
-                    <span>В графике: <b class="text-emerald-400">{{ employee.scheduled_days }} дн.</b></span>
-                    <span>Черновик: <b class="text-amber-300">{{ employee.draft_days }} дн.</b></span>
-                    <span>Остаток: <b class="text-white">{{ employee.remaining_days }} дн.</b></span>
-                </div>
-
-                <!-- 14-day TK RF rule status -->
-                <div class="pt-2 border-t border-slate-800/80 flex items-center gap-2 text-xs"
+                <!-- Simple 14-day TK RF badge -->
+                <div class="flex items-center gap-2 text-xs pt-1"
                      :class="employee.has_14_day_block ? 'text-emerald-400' : 'text-amber-300'">
-                    <i :data-lucide="employee.has_14_day_block ? 'check-circle-2' : 'alert-triangle'" class="w-4 h-4 flex-shrink-0"></i>
-                    <span v-if="employee.has_14_day_block">Ст. 125 ТК РФ соблюдена (есть непрерывный блок ≥ 14 дней)</span>
-                    <span v-else>Нужен минимум один непрерывный период от 14 календарных дней</span>
+                    <i :data-lucide="employee.has_14_day_block ? 'check-circle-2' : 'info'" class="w-4 h-4 shrink-0"></i>
+                    <span v-if="employee.has_14_day_block">Основной блок ≥ 14 дней выбран ✅</span>
+                    <span v-else>Нужен хотя бы один период от 14 дней подряд (ТК РФ)</span>
                 </div>
             </div>
 
-            <!-- 152-FZ Consent Card (if not yet accepted) -->
-            <div v-if="!employee.consent_152fz" class="bg-indigo-950/50 border border-indigo-500/40 rounded-2xl p-4 space-y-3">
+            <!-- Personal Non-Overlap Reminder (if employee has paired partners) -->
+            <div v-if="myRestrictions.length > 0" class="bg-slate-900/90 border border-fuchsia-500/30 rounded-2xl p-3.5 space-y-2">
+                <div class="text-xs font-bold text-fuchsia-300 flex items-center gap-1.5">
+                    <i data-lucide="users" class="w-4 h-4"></i>
+                    <span>Нельзя пересекаться по датам с напарницами:</span>
+                </div>
+                <div v-for="r in myRestrictions" :key="r.partner_id" class="text-xs bg-slate-800/70 rounded-xl p-2.5 border border-slate-700/70 space-y-1">
+                    <div class="flex items-center justify-between">
+                        <span class="font-semibold text-white">👤 {{ r.partner_name }}</span>
+                        <span class="text-[10px] text-slate-400">{{ r.partner_role }}</span>
+                    </div>
+                    <div v-if="r.slots && r.slots.length > 0" class="text-[11px] text-amber-300">
+                        Занято: <span v-for="(s, sIdx) in r.slots" :key="s.id">{{ formatDateRu(s.start_date) }}–{{ formatDateRu(s.end_date) }}<span v-if="sIdx < r.slots.length - 1">, </span></span>
+                    </div>
+                    <div v-else class="text-[11px] text-slate-400">Даты отпуска еще не поданы</div>
+                </div>
+            </div>
+
+            <!-- STEP 2: 152-FZ Consent Card (only shown once before consent) -->
+            <div v-if="!employee.consent_152fz" class="bg-indigo-950/60 border border-indigo-500/40 rounded-2xl p-4 space-y-3">
                 <div class="flex items-center gap-2 text-indigo-300 font-bold text-xs">
                     <i data-lucide="shield-check" class="w-4 h-4"></i>
-                    <span>Согласие на обработку персональных данных (152-ФЗ)</span>
+                    <span>Подтвердите согласие 152-ФЗ</span>
                 </div>
                 <p class="text-xs text-slate-300 leading-relaxed">
-                    Для планирования и формирования графика отпусков (форма Т-7) подтвердите согласие на обработку ваших персональных данных (ФИО, должность, смена, даты отпуска).
+                    Для оформления графика отпусков (Т-7) подтвердите согласие на обработку ваших данных (ФИО, должность, смена и даты отпуска).
                 </p>
                 <button @click="acceptConsent()" :disabled="submitting"
                         class="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow transition">
@@ -152,73 +175,73 @@
                 </button>
             </div>
 
-            <!-- Date Picker & CSP Validation Card -->
-            <div v-if="employee.consent_152fz" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+            <!-- STEP 3: Date Picker (only shown when consent is given and remaining_days > 0 or alternatives exist) -->
+            <div v-if="employee.consent_152fz && (employee.remaining_days > 0 || alternatives.length > 0)" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
                 <div class="flex items-center justify-between">
-                    <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                    <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
                         <i data-lucide="calendar-plus" class="w-4 h-4 text-indigo-400"></i>
-                        Добавить период отпуска ({{ selectedYear }})
+                        <span>Выбрать период отпуска ({{ selectedYear }})</span>
                     </h3>
                     <span v-if="computedSelectedDays > 0" class="text-xs font-bold px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300">
                         {{ computedSelectedDays }} дн.
                     </span>
                 </div>
 
-                <!-- Quick Duration Presets -->
+                <!-- Smart Duration Presets -->
                 <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="text-[11px] text-slate-400 mr-1">Быстрый выбор:</span>
-                    <button @click="applyDurationPreset(14)" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-[11px] text-indigo-300 font-medium transition">
-                        +14 дн. (основной)
+                    <button @click="applyDurationPreset(14)"
+                            class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-xs text-indigo-300 font-semibold transition">
+                        14 дн. (основной)
                     </button>
-                    <button @click="applyDurationPreset(11)" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-[11px] text-slate-300 font-medium transition">
-                        +11 дн.
+                    <button v-if="employee.remaining_days > 0 && employee.remaining_days !== 14"
+                            @click="applyDurationPreset(employee.remaining_days)"
+                            class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-emerald-600/30 border border-slate-700 text-xs text-emerald-300 font-semibold transition">
+                        Весь остаток ({{ employee.remaining_days }} дн.)
                     </button>
-                    <button @click="applyDurationPreset(7)" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-[11px] text-slate-300 font-medium transition">
-                        +7 дн.
+                    <button @click="applyDurationPreset(7)"
+                            class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-xs text-slate-300 font-medium transition">
+                        7 дн.
                     </button>
                 </div>
 
                 <div class="grid grid-cols-2 gap-2.5">
                     <div>
-                        <label class="block text-[11px] text-slate-400 mb-1">Дата начала:</label>
+                        <label class="block text-[11px] text-slate-400 mb-1">С какого числа:</label>
                         <input type="date" v-model="formStart" @change="onStartDateChange"
                                class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
                     </div>
                     <div>
-                        <label class="block text-[11px] text-slate-400 mb-1">Дата окончания:</label>
+                        <label class="block text-[11px] text-slate-400 mb-1">По какое число:</label>
                         <input type="date" v-model="formEnd"
                                class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
                     </div>
                 </div>
 
-                <!-- Blackout warning if any exist -->
-                <div v-if="blackouts.length > 0" class="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/70 text-[11px] text-slate-300 space-y-1">
-                    <div class="font-semibold text-amber-300 flex items-center gap-1">
-                        <i data-lucide="ban" class="w-3.5 h-3.5"></i>
-                        Периоды производственного запрета (блэкауты):
-                    </div>
-                    <div v-for="(b, idx) in blackouts" :key="idx" class="text-slate-400">
-                        • <b>{{ formatDateRu(b.start) }} – {{ formatDateRu(b.end) }}</b>: {{ b.name }}
-                    </div>
+                <!-- Compact Blackout Notice -->
+                <div v-if="blackouts.length > 0" class="text-[11px] text-amber-300/90 bg-slate-800/50 px-3 py-2 rounded-xl border border-slate-700/60">
+                    ⛔ Нельзя брать отпуск:
+                    <span v-for="(b, idx) in blackouts" :key="idx" class="text-slate-300">
+                        <b>{{ formatDateRu(b.start) }}–{{ formatDateRu(b.end) }}</b> ({{ b.name }})<span v-if="idx < blackouts.length - 1">; </span>
+                    </span>
                 </div>
 
                 <button @click="addPeriodToDraft()" :disabled="submitting || !formStart || !formEnd"
                         class="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow transition flex items-center justify-center gap-1.5">
                     <i data-lucide="plus-circle" class="w-4 h-4"></i>
-                    <span>Проверить и добавить в черновик</span>
+                    <span>Добавить период в черновик</span>
                 </button>
 
                 <!-- Top-3 Alternatives offered by CSP Solver on conflict -->
                 <div v-if="alternatives.length > 0" class="pt-3 border-t border-slate-800 space-y-2">
-                    <div class="text-xs font-bold text-amber-300">💡 Ближайшие свободные даты (Топ-3 от солвера):</div>
+                    <div class="text-xs font-bold text-amber-300">💡 Свободные окна без пересечений:</div>
                     <div v-for="alt in alternatives" :key="alt.option"
                          class="p-2.5 rounded-xl bg-slate-800 border border-indigo-500/40 flex items-center justify-between gap-2">
-                        <div>
-                            <div class="text-xs font-bold text-white">Вариант {{ alt.option }}: {{ formatDateRu(alt.start) }} – {{ formatDateRu(alt.end) }}</div>
-                            <div class="text-[11px] text-slate-400">{{ alt.days }} дн. • {{ alt.reason }}</div>
+                        <div class="min-w-0">
+                            <div class="text-xs font-bold text-white">Вариант {{ alt.option }}: {{ formatAltSlots(alt) }}</div>
+                            <div class="text-[11px] text-slate-400">{{ alt.total_days || alt.days }} дн. • {{ alt.reason }}</div>
                         </div>
-                        <button @click="selectAlternative(alt)"
-                                class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold flex-shrink-0">
+                        <button @click="selectAlternative(alt)" :disabled="submitting"
+                                class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold shrink-0">
                             Выбрать
                         </button>
                     </div>
@@ -228,11 +251,11 @@
             <!-- Current Draft Card -->
             <div v-if="draftSlots.length > 0" class="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 space-y-3">
                 <div class="flex items-center justify-between">
-                    <h3 class="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <h3 class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
                         <i data-lucide="file-edit" class="w-4 h-4"></i>
-                        Черновик заявки ({{ draftSlots.length }})
+                        <span>Черновик ({{ employee.draft_days }} дн.)</span>
                     </h3>
-                    <button @click="clearDraft()" class="text-[11px] text-rose-400 hover:text-rose-300">Очистить всё</button>
+                    <button @click="clearDraft()" class="text-[11px] text-rose-400 hover:text-rose-300">Сбросить</button>
                 </div>
 
                 <div class="space-y-2">
@@ -245,30 +268,31 @@
                                 <span v-if="ds.days >= 14" class="text-emerald-400 font-medium">• Основной блок (≥14 дн.)</span>
                             </div>
                         </div>
-                        <button @click="removeDraftSlot(idx)" class="p-1.5 text-rose-400 hover:bg-rose-500/20 rounded-lg transition">
+                        <button @click="removeDraftSlot(idx)" class="p-1.5 text-rose-400 hover:bg-rose-500/20 rounded-lg transition" title="Удалить период">
                             ✕
                         </button>
                     </div>
                 </div>
 
-                <button @click="submitDraft()" :disabled="submitting"
+                <div v-if="!isReadyToSubmitDraft" class="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl p-2.5">
+                    <span v-if="employee.remaining_days > 0">👉 Добавьте ещё <b>{{ employee.remaining_days }} дн.</b> до полной нормы ({{ employee.total_vacation_days }} дн.), чтобы отправить график руководителю.</span>
+                    <span v-else-if="!employee.has_14_day_block">⚠️ Хотя бы одна часть отпуска должна быть не менее 14 дней подряд.</span>
+                </div>
+
+                <button v-else @click="submitDraft()" :disabled="submitting"
                         class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 transition flex items-center justify-center gap-2">
-                    <span>✅ Подтвердить и отправить руководителю</span>
+                    <span>✅ Отправить график руководителю</span>
                 </button>
             </div>
 
             <!-- My Submitted / Approved Vacation Slots -->
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-                <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+            <div v-if="mySlots.length > 0" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2.5">
+                <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
                     <i data-lucide="calendar-check" class="w-4 h-4 text-emerald-400"></i>
-                    Мои периоды в графике ({{ selectedYear }})
+                    <span>Мои отправленные периоды ({{ selectedYear }})</span>
                 </h3>
 
-                <div v-if="mySlots.length === 0" class="text-xs text-slate-500 py-3 text-center">
-                    У вас пока нет отправленных периодов на {{ selectedYear }} год.
-                </div>
-
-                <div v-else class="space-y-2">
+                <div class="space-y-2">
                     <div v-for="sl in mySlots" :key="sl.id"
                          class="p-3 rounded-xl bg-slate-800/80 border border-slate-700/80 flex items-center justify-between">
                         <div>
@@ -287,39 +311,51 @@
             </div>
         </main>
 
-        <!-- TAB 2: ОБЩИЙ ГРАФИК ОТПУСКОВ ВСЕХ СОТРУДНИКОВ -->
-        <main v-if="activeTab === 'all'" class="p-4 space-y-4">
+        <!-- TAB 2: КТО КОГДА В ОТПУСКЕ (SHIFT / DEPARTMENT / FACTORY SCHEDULE) -->
+        <main v-if="activeTab === 'all'" class="p-4 space-y-3.5">
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
                 <div class="flex items-center justify-between">
                     <h2 class="text-sm font-bold text-white flex items-center gap-2">
                         <i data-lucide="users" class="w-4 h-4 text-indigo-400"></i>
-                        График отпусков фабрики ({{ selectedYear }})
+                        <span>Кто когда в отпуске ({{ selectedYear }})</span>
                     </h2>
-                    <span class="text-xs text-slate-400">{{ filteredCompanySchedule.length }} сотр.</span>
+                    <span class="text-xs text-slate-400">{{ filteredCompanySchedule.length }} чел.</span>
                 </div>
 
-                <!-- Filters: Search, Shift, Month -->
-                <div class="space-y-2">
-                    <input v-model="scheduleSearch" type="text" placeholder="Поиск по ФИО, должности или цеху..."
-                           class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
+                <!-- Role-Aware Scope Pills (My Shift / My Dept / All Factory) -->
+                <div v-if="employee" class="grid grid-cols-3 gap-1.5 bg-slate-800/80 p-1 rounded-xl border border-slate-700 text-xs">
+                    <button @click="scheduleScope = 'my_shift'"
+                            :class="scheduleScope === 'my_shift' ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400'"
+                            class="py-1.5 rounded-lg transition text-[11px]">
+                        Моя смена
+                    </button>
+                    <button @click="scheduleScope = 'my_dept'"
+                            :class="scheduleScope === 'my_dept' ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400'"
+                            class="py-1.5 rounded-lg transition text-[11px]">
+                        Мой цех
+                    </button>
+                    <button @click="scheduleScope = 'all'"
+                            :class="scheduleScope === 'all' ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400'"
+                            class="py-1.5 rounded-lg transition text-[11px]">
+                        Вся фабрика
+                    </button>
+                </div>
 
-                    <div class="grid grid-cols-2 gap-2">
-                        <select v-model="scheduleShiftFilter" class="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white">
-                            <option value="">Все смены</option>
-                            <option v-for="s in shifts" :key="s.id" :value="s.name">{{ s.name }}</option>
-                        </select>
+                <!-- Simple Search & Month Filter -->
+                <div class="grid grid-cols-2 gap-2">
+                    <input v-model="scheduleSearch" type="text" placeholder="Поиск по ФИО..."
+                           class="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
 
-                        <select v-model="scheduleMonthFilter" class="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white">
-                            <option :value="0">Все месяцы {{ selectedYear }}</option>
-                            <option v-for="(mName, mIdx) in monthNames" :key="mIdx" :value="mIdx + 1">{{ mName }}</option>
-                        </select>
-                    </div>
+                    <select v-model="scheduleMonthFilter" class="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white">
+                        <option :value="0">Все месяцы</option>
+                        <option v-for="(mName, mIdx) in monthNames" :key="mIdx" :value="mIdx + 1">{{ mName }}</option>
+                    </select>
                 </div>
 
                 <!-- Employees & Their Vacations List -->
-                <div class="space-y-2.5 pt-1">
+                <div class="space-y-2 pt-1">
                     <div v-if="filteredCompanySchedule.length === 0" class="text-xs text-slate-500 py-6 text-center">
-                        По выбранным фильтрам сотрудников не найдено.
+                        По выбранному фильтру сотрудников не найдено.
                     </div>
 
                     <div v-for="emp in filteredCompanySchedule" :key="emp.employee_id"
@@ -330,21 +366,21 @@
                                     <span>{{ emp.full_name }}</span>
                                     <span v-if="employee && emp.employee_id === employee.id" class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/30 text-indigo-300">Вы</span>
                                 </div>
-                                <div class="text-[11px] text-slate-400">{{ emp.role }} • {{ emp.department_name }} • {{ emp.shift }}</div>
+                                <div class="text-[11px] text-slate-400">{{ emp.role }} • {{ emp.shift }}</div>
                             </div>
-                            <span class="text-[11px] font-semibold text-slate-300 flex-shrink-0">
+                            <span class="text-[11px] font-semibold text-slate-300 shrink-0">
                                 {{ emp.scheduled_days }} / {{ emp.total_vacation_days }} дн.
                             </span>
                         </div>
 
                         <div v-if="emp.slots.length === 0" class="text-[11px] text-slate-500 italic">
-                            Даты отпуска на {{ selectedYear }} год еще не выбраны
+                            Даты еще не выбраны
                         </div>
 
                         <div v-else class="flex flex-wrap gap-1.5">
                             <div v-for="sl in emp.slots" :key="sl.id"
-                                 class="px-2.5 py-1 rounded-lg text-[11px] border flex items-center gap-1.5"
-                                 :class="sl.status === 'APPROVED' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' : (sl.status === 'CONFLICT' ? 'bg-rose-500/15 border-rose-500/30 text-rose-300' : 'bg-amber-500/15 border-amber-500/30 text-amber-300')">
+                                  class="px-2.5 py-1 rounded-lg text-[11px] border flex items-center gap-1.5"
+                                  :class="sl.status === 'APPROVED' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' : (sl.status === 'CONFLICT' ? 'bg-rose-500/15 border-rose-500/30 text-rose-300' : 'bg-amber-500/15 border-amber-500/30 text-amber-300')">
                                 <span class="font-semibold">{{ formatDateRu(sl.start_date) }} – {{ formatDateRu(sl.end_date) }}</span>
                                 <span class="opacity-75">({{ sl.days_count }} дн.)</span>
                             </div>
@@ -354,8 +390,8 @@
             </div>
         </main>
 
-        <!-- TAB 3: ПУЛЬТ РУКОВОДИТЕЛЯ (ADMIN PANEL) -->
-        <main v-if="activeTab === 'admin' && isAdmin && adminData" class="p-4 space-y-4">
+        <!-- TAB 3: ПУЛЬТ РУКОВОДИТЕЛЯ (MANAGER / ADMIN PANEL) -->
+        <main v-if="activeTab === 'admin' && isAdmin && adminData" class="p-4 space-y-3.5">
             <!-- KPI Summary Cards -->
             <div class="grid grid-cols-2 gap-2.5">
                 <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3">
@@ -378,35 +414,39 @@
             <!-- Pending Approvals Queue -->
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
                 <div class="flex items-center justify-between gap-2">
-                    <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                    <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
                         <i data-lucide="inbox" class="w-4 h-4 text-amber-400"></i>
-                        Заявки на согласование ({{ adminData.pending_slots.length }})
+                        <span>Заявки на согласование ({{ adminData.pending_slots.length }})</span>
                     </h3>
                     <button v-if="adminData.pending_slots.length > 0" @click="runBatchApprove()" :disabled="submitting"
-                            class="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold transition">
-                        ⚡ Авто-согласование
+                            class="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold transition">
+                        ⚡ Авто-согласовать
                     </button>
                 </div>
 
-                <div v-if="adminData.pending_slots.length === 0" class="text-xs text-slate-500 py-4 text-center">
+                <div v-if="adminData.pending_slots.length === 0" class="text-xs text-slate-400 py-5 text-center">
                     🎉 Все поданные заявки на {{ selectedYear }} год рассмотрены!
                 </div>
 
                 <div v-else class="space-y-2.5">
                     <div v-for="item in adminData.pending_slots" :key="item.slot_id"
                          class="p-3 rounded-xl bg-slate-800/90 border border-slate-700 space-y-2.5">
-                        <div class="flex items-start justify-between">
+                        <div class="flex items-start justify-between gap-2">
                             <div>
                                 <div class="text-xs font-bold text-white">{{ item.full_name }}</div>
                                 <div class="text-[11px] text-slate-400">{{ item.role }} • {{ item.shift }}</div>
                             </div>
-                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold" :class="statusBadgeClass(item.status)">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0" :class="statusBadgeClass(item.status)">
                                 {{ statusLabelRu(item.status) }}
                             </span>
                         </div>
 
                         <div class="text-xs font-semibold text-indigo-300 bg-slate-900/70 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
                             📅 {{ formatDateRu(item.start_date) }} – {{ formatDateRu(item.end_date) }} ({{ item.days_count }} дн.)
+                        </div>
+
+                        <div v-if="item.conflict_reason" class="text-[11px] text-rose-300 bg-rose-950/40 px-2.5 py-1.5 rounded-lg border border-rose-800/50">
+                            ⚠️ {{ item.conflict_reason }}
                         </div>
 
                         <div class="grid grid-cols-2 gap-2">
@@ -423,14 +463,20 @@
                 </div>
             </div>
 
-            <!-- Employee Bot Access Moderation -->
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-                <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                    <i data-lucide="shield" class="w-4 h-4 text-indigo-400"></i>
-                    Доступ сотрудников к боту MAX
-                </h3>
+            <!-- Collapsible Employee Bot Access Moderation -->
+            <details :open="pendingAccessCount > 0" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 group">
+                <summary class="cursor-pointer flex items-center justify-between text-xs font-bold text-white">
+                    <span class="flex items-center gap-1.5">
+                        <i data-lucide="shield" class="w-4 h-4 text-indigo-400"></i>
+                        <span>Доступ сотрудников к боту MAX</span>
+                        <span v-if="pendingAccessCount > 0" class="px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 text-[10px] font-extrabold">
+                            Ждут: {{ pendingAccessCount }}
+                        </span>
+                    </span>
+                    <span class="text-[11px] text-slate-400 group-open:rotate-180 transition-transform">▼</span>
+                </summary>
 
-                <div class="space-y-2">
+                <div class="space-y-2 pt-3 mt-3 border-t border-slate-800 max-h-72 overflow-y-auto pr-1">
                     <div v-for="emp in adminData.employees_access" :key="emp.id"
                          class="p-2.5 rounded-xl bg-slate-800/70 border border-slate-700/70 flex items-center justify-between gap-2">
                         <div>
@@ -446,13 +492,13 @@
                         </select>
                     </div>
                 </div>
-            </div>
+            </details>
         </main>
 
-        <!-- Bottom Navigation Bar -->
+        <!-- Bottom Navigation Bar (Role-Aware) -->
         <nav class="fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur border-t border-slate-800 z-40">
-            <div class="max-w-lg mx-auto grid" :class="isAdmin ? 'grid-cols-3' : 'grid-cols-2'">
-                <button @click="activeTab = 'my'"
+            <div class="max-w-lg mx-auto grid" :class="(isAdmin && employee) ? 'grid-cols-3' : 'grid-cols-2'">
+                <button v-if="employee || !isAdmin" @click="activeTab = 'my'"
                         :class="activeTab === 'my' ? 'text-indigo-400 border-t-2 border-indigo-500 bg-indigo-500/5' : 'text-slate-400'"
                         class="py-2.5 flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition">
                     <i data-lucide="user" class="w-4 h-4"></i>
@@ -463,7 +509,7 @@
                         :class="activeTab === 'all' ? 'text-indigo-400 border-t-2 border-indigo-500 bg-indigo-500/5' : 'text-slate-400'"
                         class="py-2.5 flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition">
                     <i data-lucide="calendar-range" class="w-4 h-4"></i>
-                    <span>Отпуска всех</span>
+                    <span>Кто когда в отпуске</span>
                 </button>
 
                 <button v-if="isAdmin" @click="activeTab = 'admin'"

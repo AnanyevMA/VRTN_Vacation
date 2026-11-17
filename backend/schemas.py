@@ -98,6 +98,24 @@ class IncompatibleGroupOut(BaseModel):
     reason: Optional[str] = None
 
 
+# --- Personal Incompatible Pair Schemas ---
+class IncompatiblePairCreate(BaseModel):
+    employee_a_id: int
+    employee_b_id: int
+    reason: Optional[str] = "Персональный запрет пересечения (напарники)"
+
+
+class IncompatiblePairOut(BaseModel):
+    id: str
+    employee_a_id: int
+    employee_b_id: int
+    employee_a_name: str = ""
+    employee_b_name: str = ""
+    employee_a_role: str = ""
+    employee_b_role: str = ""
+    reason: Optional[str] = None
+
+
 
 # --- Employee Schemas ---
 class EmployeeBase(BaseModel):

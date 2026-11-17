@@ -13,6 +13,8 @@ from backend.schemas import (
     UpdateRulesAndRosterResponse,
     IncompatibleGroupCreate,
     IncompatibleGroupOut,
+    IncompatiblePairCreate,
+    IncompatiblePairOut,
 )
 from backend.agents.manager_agent import ManagerAgent
 from backend.auth import require_admin
@@ -174,4 +176,98 @@ def delete_incompatible_group(group_id: str, db: Session = Depends(get_db)):
     rule.parameters = {"groups": groups}
     db.commit()
     return {"success": True, "message": "Группа непересечения удалена"}
+
+
+@router.get("/incompatible-pairs", response_model=List[IncompatiblePairOut])
+def get_incompatible_pairs(db: Session = Depends(get_db)):
+    """Returns list of personal 1-on-1 employee pairs that cannot have overlapping vacations."""
+    rule = db.query(ScheduleRule).filter(ScheduleRule.rule_key == "personal_incompatible_pairs").first()
+    if not rule:
+        return []
+    pairs = rule.parameters.get("pairs", [])
+
+    all_emps = {e.id: e for e in db.query(Employee).all()}
+    result = []
+    for p in pairs:
+        aid = p.get("employee_a_id")
+        bid = p.get("employee_b_id")
+        emp_a = all_emps.get(aid)
+        emp_b = all_emps.get(bid)
+        result.append(IncompatiblePairOut(
+            id=str(p.get("id", "")),
+            employee_a_id=aid,
+            employee_b_id=bid,
+            employee_a_name=emp_a.full_name if emp_a else f"Сотрудник #{aid}",
+            employee_b_name=emp_b.full_name if emp_b else f"Сотрудник #{bid}",
+            employee_a_role=emp_a.role if emp_a else "",
+            employee_b_role=emp_b.role if emp_b else "",
+            reason=p.get("reason"),
+        ))
+    return result
+
+
+@router.post("/incompatible-pairs", response_model=IncompatiblePairOut, dependencies=[Depends(require_admin)])
+def create_incompatible_pair(payload: IncompatiblePairCreate, db: Session = Depends(get_db)):
+    """Creates a new personal 1-on-1 mutual-exclusion pair between two employees."""
+    if payload.employee_a_id == payload.employee_b_id:
+        raise HTTPException(status_code=400, detail="Нельзя выбрать одного и того же сотрудника дважды")
+
+    emp_a = db.query(Employee).filter(Employee.id == payload.employee_a_id).first()
+    emp_b = db.query(Employee).filter(Employee.id == payload.employee_b_id).first()
+    if not emp_a or not emp_b:
+        raise HTTPException(status_code=404, detail="Один из выбранных сотрудников не найден")
+
+    rule = db.query(ScheduleRule).filter(ScheduleRule.rule_key == "personal_incompatible_pairs").first()
+    if not rule:
+        rule = ScheduleRule(
+            rule_key="personal_incompatible_pairs",
+            rule_type="HARD",
+            parameters={"pairs": []},
+            description="Персональные запреты пересечения отпусков (кто с кем лично не может уходить в отпуск одновременно).",
+            is_active=True,
+        )
+        db.add(rule)
+        db.flush()
+
+    pairs = list(rule.parameters.get("pairs", []))
+    target_set = {payload.employee_a_id, payload.employee_b_id}
+    for existing in pairs:
+        if {existing.get("employee_a_id"), existing.get("employee_b_id")} == target_set:
+            raise HTTPException(status_code=400, detail="Персональный запрет для этой пары сотрудников уже существует")
+
+    new_id = str(uuid.uuid4())[:8]
+    reason_str = (payload.reason or "").strip() or "Персональный запрет пересечения (напарники)"
+    new_pair = {
+        "id": new_id,
+        "employee_a_id": payload.employee_a_id,
+        "employee_b_id": payload.employee_b_id,
+        "reason": reason_str,
+    }
+    pairs.append(new_pair)
+    rule.parameters = {"pairs": pairs}
+    db.commit()
+
+    return IncompatiblePairOut(
+        id=new_id,
+        employee_a_id=payload.employee_a_id,
+        employee_b_id=payload.employee_b_id,
+        employee_a_name=emp_a.full_name,
+        employee_b_name=emp_b.full_name,
+        employee_a_role=emp_a.role,
+        employee_b_role=emp_b.role,
+        reason=reason_str,
+    )
+
+
+@router.delete("/incompatible-pairs/{pair_id}", dependencies=[Depends(require_admin)])
+def delete_incompatible_pair(pair_id: str, db: Session = Depends(get_db)):
+    """Deletes a personal 1-on-1 mutual-exclusion pair by id."""
+    rule = db.query(ScheduleRule).filter(ScheduleRule.rule_key == "personal_incompatible_pairs").first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Правило не найдено")
+
+    pairs = [p for p in rule.parameters.get("pairs", []) if str(p.get("id")) != str(pair_id)]
+    rule.parameters = {"pairs": pairs}
+    db.commit()
+    return {"success": True, "message": "Персональный запрет пересечения удален"}
 

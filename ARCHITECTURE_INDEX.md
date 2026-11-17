@@ -48,6 +48,18 @@
 * `L179–L258` — Схемы `DateSlot`, `VacationSlot`, `ScheduleRule` (валидатор `window_search_days: 1..90`).
 * `L260–L344` — Схемы инструментов агентов (`VerifyPhone`, `OptimizeVacation`, `UpdateRulesAndRoster`) и чата (`ChatMessageIn` с `max_length=500`, `ChatMessageOut`, `MaxWebhookPayload`).
 
+### [backend/api/miniapp_routes.py](file:///d:/PyCharm_Projects/Отпуск/backend/api/miniapp_routes.py) (420 строк)
+* `L22–L55` — Pydantic-модели для Mini App (`MiniAppConsentIn`, `MiniAppDraftAddIn`, `MiniAppDraftRemoveIn`, `MiniAppSubmitDraftIn`, `MiniAppAdminSlotActionIn`, `MiniAppAdminBatchApproveIn`, `MiniAppAdminAccessIn`).
+* `L57–L261` — `_check_is_admin` и `GET /api/miniapp/context`: получение контекста сотрудника, черновика, блэкаутов, общего графика предприятия (`company_schedule` без телефонов) и секции руководителя (`admin`).
+* `L264–L341` — Действия сотрудника: `POST /api/miniapp/consent`, `POST /api/miniapp/draft/add` (проверка через `VacationOptimizer` + Топ-3 альтернативы), `POST /api/miniapp/draft/remove`, `POST /api/miniapp/draft/submit`.
+* `L344–L420` — Действия администратора: `POST /api/miniapp/admin/slot-action` (`APPROVE`/`REJECT` + уведомление в MAX), `POST /api/miniapp/admin/batch-approve`, `POST /api/miniapp/admin/bot-access`.
+
+### [frontend/miniapp.js](file:///d:/PyCharm_Projects/Отпуск/frontend/miniapp.js) (473 строки)
+* `L5–L64` — `detectMaxUserId()`: определение `max_user_id` из URL, `window.WebApp.initDataUnsafe.user`, `window.Telegram.WebApp` или `localStorage`.
+* `L66–L192` — Состояния Vue 3, `loadContext()`, переключение года (`changeYear`), автовыбор активного года отпусков.
+* `L194–L344` — Логика вкладки «Мой отпуск» (`applyDurationPreset`, `acceptConsent`, `addPeriodToDraft`, `selectAlternative`, `removeDraftSlot`, `submitDraft`).
+* `L346–L473` — Фильтрация общего графика (`filteredCompanySchedule`) и действия руководителя (`handleSlotAction`, `runBatchApprove`, `updateBotAccess`).
+
 ---
 
 ## 2. Схема базы данных (`SQLite: vacations.db`, [backend/models.py](file:///d:/PyCharm_Projects/Отпуск/backend/models.py))
@@ -116,7 +128,7 @@
 
 ### Таблица `schedule_rules` (Матрица правил планирования — `L105–L114`)
 * `id`: Integer, PK
-* `rule_key`: String(50), Unique, Not Null (`tk_rf_min_block`, `max_concurrent_roles`, `max_concurrent_shifts`, `incompatible_employee_groups`, `blackout_periods`)
+* `rule_key`: String(50), Unique, Not Null (`tk_rf_min_block`, `max_concurrent_roles`, `max_concurrent_shifts`, `incompatible_employee_groups`, `personal_incompatible_pairs`, `blackout_periods`)
 * `rule_type`: String(20), Not Null (`HARD` | `SOFT`)
 * `parameters`: JSON, Not Null
 * `description`: Text, Nullable
@@ -144,7 +156,7 @@
 
 ---
 
-## 3. Полная карта REST API эндпоинтов (32 маршрута)
+## 3. Полная карта REST API эндпоинтов (40 маршрутов)
 
 Эндпоинты с пометкой 🔒 требуют `Depends(require_admin)` (заголовок `X-Admin-Token` или `?token=` при установленном `ADMIN_API_KEY`).
 
@@ -182,9 +194,12 @@
 | `PUT` | `/api/rules/shift-quotas` | 🔒 Admin | `rule_routes.py` | Сохранение квот одновременного отсутствия по сменам |
 | `PUT` | `/api/rules/blackouts` | 🔒 Admin | `rule_routes.py` | Обновление списка блэкаут-периодов |
 | `PUT` | `/api/rules/{rule_id}/toggle` | 🔒 Admin | `rule_routes.py` | Включение/выключение правила |
-| `GET` | `/api/rules/incompatible-groups` | Публ. | `rule_routes.py` | Список групп непересекающихся сотрудников |
+| `GET` | `/api/rules/incompatible-groups` | 🔒 Admin | `rule_routes.py` | Список групп непересекающихся сотрудников |
 | `POST` | `/api/rules/incompatible-groups` | 🔒 Admin | `rule_routes.py` | Создание группы взаимного исключения сотрудников |
 | `DELETE` | `/api/rules/incompatible-groups/{group_id}` | 🔒 Admin | `rule_routes.py` | Удаление группы взаимного исключения |
+| `GET` | `/api/rules/incompatible-pairs` | 🔒 Admin | `rule_routes.py` | Список персональных запретов пересечения 1-на-1 |
+| `POST` | `/api/rules/incompatible-pairs` | 🔒 Admin | `rule_routes.py` | Создание персонального запрета пересечения 1-на-1 |
+| `DELETE` | `/api/rules/incompatible-pairs/{pair_id}` | 🔒 Admin | `rule_routes.py` | Удаление персонального запрета пересечения 1-на-1 |
 | `GET` | `/api/bot-admins` | Публ. | `admin_routes.py` | Список администраторов бота MAX |
 | `POST` | `/api/bot-admins` | 🔒 Admin | `admin_routes.py` | Добавление администратора бота |
 | `PUT` | `/api/bot-admins/{admin_id}` | 🔒 Admin | `admin_routes.py` | Обновление администратора бота |
@@ -196,3 +211,11 @@
 | `GET` | `/api/export/stats` | Публ. | `export_routes.py` | Сводная KPI-статистика для шапки дашборда |
 | `GET` | `/api/export/csv` | 🔒 Admin | `export_routes.py` | Выгрузка графика в CSV (`utf-8-sig`, санитизация формул) |
 | `GET` | `/api/export/excel` | 🔒 Admin | `export_routes.py` | Выгрузка формы Т-7 в Excel (`.xlsx` через `openpyxl`, санитизация формул) |
+| `GET` | `/api/miniapp/context` | Публ. (UID) | `miniapp_routes.py` | Контекст Mini App: баланс сотрудника, черновик, график всех отпусков и панель админа |
+| `POST` | `/api/miniapp/consent` | Публ. (UID) | `miniapp_routes.py` | Подтверждение согласия 152-ФЗ в Mini App |
+| `POST` | `/api/miniapp/draft/add` | Публ. (UID) | `miniapp_routes.py` | Проверка дат через CSP-солвер и добавление периода в черновик |
+| `POST` | `/api/miniapp/draft/remove` | Публ. (UID) | `miniapp_routes.py` | Удаление периода или очистка черновика |
+| `POST` | `/api/miniapp/draft/submit` | Публ. (UID) | `miniapp_routes.py` | Отправка черновика руководителю на согласование + уведомление в MAX |
+| `POST` | `/api/miniapp/admin/slot-action` | 👑 BotAdmin | `miniapp_routes.py` | Утверждение (`APPROVE`) или отклонение (`REJECT`) слота руководителем |
+| `POST` | `/api/miniapp/admin/batch-approve` | 👑 BotAdmin | `miniapp_routes.py` | Пакетное авто-согласование бесконфликтных заявок |
+| `POST` | `/api/miniapp/admin/bot-access` | 👑 BotAdmin | `miniapp_routes.py` | Смена статуса доступа сотрудника к боту (`APPROVED` / `PENDING` / `BLOCKED`) |

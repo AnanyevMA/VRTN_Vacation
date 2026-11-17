@@ -440,6 +440,46 @@ def test_api_incompatible_employee_groups():
     assert not any(g["id"] == gid for g in groups_after)
 
 
+def test_api_personal_incompatible_pairs():
+    emps = client.get("/api/employees").json()
+    assert len(emps) >= 2
+    e1, e2 = emps[0]["id"], emps[1]["id"]
+
+    # 1. Create personal pair
+    r_create = client.post("/api/rules/incompatible-pairs", json={
+        "employee_a_id": e1,
+        "employee_b_id": e2,
+        "reason": "Напарницы на одной спецмашине",
+    })
+    assert r_create.status_code == 200
+    pair_data = r_create.json()
+    pid = pair_data["id"]
+    assert pair_data["employee_a_id"] == e1
+    assert pair_data["employee_b_id"] == e2
+    assert pair_data["employee_a_name"]
+    assert pair_data["employee_b_name"]
+
+    # 2. Duplicate pair rejected
+    r_dup = client.post("/api/rules/incompatible-pairs", json={
+        "employee_a_id": e2,
+        "employee_b_id": e1,
+        "reason": "Дубль",
+    })
+    assert r_dup.status_code == 400
+
+    # 3. List pairs
+    r_list = client.get("/api/rules/incompatible-pairs")
+    assert r_list.status_code == 200
+    pairs = r_list.json()
+    assert any(p["id"] == pid for p in pairs)
+
+    # 4. Delete pair
+    r_del = client.delete(f"/api/rules/incompatible-pairs/{pid}")
+    assert r_del.status_code == 200
+    pairs_after = client.get("/api/rules/incompatible-pairs").json()
+    assert not any(p["id"] == pid for p in pairs_after)
+
+
 def test_api_export_and_chat_reset():
     # 1. Verify Excel T-7 export works without pandas
     r_xlsx = client.get("/api/export/excel")

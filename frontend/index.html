@@ -226,12 +226,15 @@
                 :shift-quotas="shiftQuotas"
                 :employees="employees"
                 :incompatible-groups="incompatibleGroups"
+                :incompatible-pairs="incompatiblePairs"
                 @save-role-quotas="saveRoleQuotas"
                 @add-blackout="addBlackout"
                 @remove-blackout="removeBlackout"
                 @save-shift-quotas="saveShiftQuotas"
                 @add-incompatible-group="addIncompatibleGroup"
-                @delete-incompatible-group="deleteIncompatibleGroup">
+                @delete-incompatible-group="deleteIncompatibleGroup"
+                @add-incompatible-pair="addIncompatiblePair"
+                @delete-incompatible-pair="deleteIncompatiblePair">
             </rules-view>
 
             <!-- TAB 5: MAX Messenger Live Simulator -->

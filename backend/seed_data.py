@@ -68,6 +68,13 @@ def ensure_minimal_rules_if_empty():
                 "description": "Группы сотрудников, чьи отпуска не должны пересекаться (взаимозаменяемые швеи и специалисты).",
                 "is_active": True,
             },
+            {
+                "rule_key": "personal_incompatible_pairs",
+                "rule_type": "HARD",
+                "parameters": {"pairs": []},
+                "description": "Персональные запреты пересечения отпусков (кто с кем лично не может уходить в отпуск одновременно).",
+                "is_active": True,
+            },
         ]
         for r_data in rules_data:
             db.add(ScheduleRule(**r_data))
@@ -235,6 +242,13 @@ def seed_database():
             "description": "Группы сотрудников, чьи отпуска не должны пересекаться (взаимозаменяемые швеи и специалисты).",
             "is_active": True,
         },
+        {
+            "rule_key": "personal_incompatible_pairs",
+            "rule_type": "HARD",
+            "parameters": {"pairs": []},
+            "description": "Персональные запреты пересечения отпусков (кто с кем лично не может уходить в отпуск одновременно).",
+            "is_active": True,
+        },
     ]
 
     for r_data in rules_data:
@@ -280,6 +294,19 @@ def ensure_default_rules(db):
             is_active=True,
         )
         db.add(incomp_rule)
+        db.commit()
+
+    # 3. Personal incompatible pairs rule
+    pair_rule = db.query(ScheduleRule).filter(ScheduleRule.rule_key == "personal_incompatible_pairs").first()
+    if not pair_rule:
+        pair_rule = ScheduleRule(
+            rule_key="personal_incompatible_pairs",
+            rule_type="HARD",
+            parameters={"pairs": []},
+            description="Персональные запреты пересечения отпусков (кто с кем лично не может уходить в отпуск одновременно).",
+            is_active=True,
+        )
+        db.add(pair_rule)
         db.commit()
 
 

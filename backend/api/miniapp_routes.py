@@ -1,6 +1,6 @@
 import os
 import secrets
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, Field
@@ -11,6 +11,7 @@ from backend.models import Employee, BotAdmin, Department, WorkShift, VacationSl
 from backend.agents.intake_agent import IntakeAgent
 from backend.agents.manager_agent import ManagerAgent
 from backend.solver.optimizer import VacationOptimizer
+from backend.solver.nlp_date_parser import calculate_slot_days
 from backend.services.max_bot_client import max_bot_client
 
 router = APIRouter(prefix="/api/miniapp", tags=["MAX Mini App"])
@@ -25,6 +26,12 @@ class MiniAppAddSlotIn(BaseModel):
     max_user_id: str = Field(..., min_length=1, max_length=128)
     start_date: date
     end_date: date
+
+
+class MiniAppSelectAlternativeIn(BaseModel):
+    max_user_id: str = Field(..., min_length=1, max_length=128)
+    slots: List[Dict[str, str]]
+    replace_draft: bool = True
 
 
 class MiniAppRemoveDraftSlotIn(BaseModel):
@@ -172,6 +179,7 @@ def get_miniapp_context(
     emp_data = None
     my_slots = []
     draft_slots = []
+    my_restrictions = []
     if employee:
         my_slots = slots_by_emp.get(employee.id, [])
         draft = db.query(EmployeeDraft).filter(EmployeeDraft.employee_id == employee.id).first()
@@ -189,15 +197,59 @@ def get_miniapp_context(
                 except Exception:
                     continue
 
+        # Collect personal non-overlapping partners (1-on-1 pairs + mutual-exclusion groups)
+        emp_by_id = {e.id: e for e in all_employees}
+        pair_rule = db.query(ScheduleRule).filter(
+            ScheduleRule.rule_key == "personal_incompatible_pairs",
+            ScheduleRule.is_active == True,
+        ).first()
+        if pair_rule and isinstance(pair_rule.parameters, dict):
+            for p in pair_rule.parameters.get("pairs", []):
+                aid, bid = p.get("employee_a_id"), p.get("employee_b_id")
+                partner_id = bid if aid == employee.id else (aid if bid == employee.id else None)
+                if partner_id and partner_id in emp_by_id:
+                    partner = emp_by_id[partner_id]
+                    my_restrictions.append({
+                        "partner_id": partner.id,
+                        "partner_name": partner.full_name,
+                        "partner_role": partner.role,
+                        "reason": p.get("reason") or "Персональный запрет пересечения",
+                        "slots": slots_by_emp.get(partner.id, []),
+                    })
+
+        group_rule = db.query(ScheduleRule).filter(
+            ScheduleRule.rule_key == "incompatible_employee_groups",
+            ScheduleRule.is_active == True,
+        ).first()
+        if group_rule and isinstance(group_rule.parameters, dict):
+            seen_pids = {r["partner_id"] for r in my_restrictions}
+            for g in group_rule.parameters.get("groups", []):
+                eids = g.get("employee_ids", [])
+                if employee.id in eids:
+                    for pid in eids:
+                        if pid != employee.id and pid not in seen_pids and pid in emp_by_id:
+                            partner = emp_by_id[pid]
+                            seen_pids.add(pid)
+                            my_restrictions.append({
+                                "partner_id": partner.id,
+                                "partner_name": partner.full_name,
+                                "partner_role": partner.role,
+                                "reason": g.get("name") or "Группа непересечения",
+                                "slots": slots_by_emp.get(partner.id, []),
+                            })
+
         scheduled_days = sum(s["days_count"] for s in my_slots)
         draft_days = sum(d["days"] for d in draft_slots)
         total_days = employee.total_vacation_days or 36
         has_14_block = any(s["days_count"] >= 14 for s in my_slots) or any(d["days"] >= 14 for d in draft_slots)
+        role_lower = (employee.role or "").lower()
+        is_shift_lead = any(k in role_lower for k in ("мастер", "технолог", "руковод", "начальник", "старш"))
 
         emp_data = {
             "id": employee.id,
             "full_name": employee.full_name,
             "role": employee.role,
+            "is_shift_lead": is_shift_lead,
             "department_id": employee.department_id,
             "department_name": depts.get(employee.department_id, "Швейный цех"),
             "shift": employee.shift or "Смена 1",
@@ -233,10 +285,17 @@ def get_miniapp_context(
                         "days_count": sl.days_count,
                         "is_primary_block": sl.is_primary_block,
                         "status": sl.status,
+                        "conflict_reason": sl.conflict_reason,
                     })
         summary["pending_slots_count"] = len([s for s in pending_slots_out if s["status"] != "CONFLICT"])
         summary["conflict_slots_count"] = len([s for s in pending_slots_out if s["status"] == "CONFLICT"])
 
+        # Sort employees_access so PENDING access requests appear first
+        access_order = {"PENDING": 0, "APPROVED": 1, "BLOCKED": 2}
+        sorted_emps_for_access = sorted(
+            all_employees,
+            key=lambda x: (access_order.get(getattr(x, "bot_access", "APPROVED") or "APPROVED", 1), x.full_name),
+        )
         employees_access = [
             {
                 "id": e.id,
@@ -247,7 +306,7 @@ def get_miniapp_context(
                 "bot_access": getattr(e, "bot_access", "APPROVED") or "APPROVED",
                 "consent_152fz": bool(getattr(e, "consent_152fz", False)),
             }
-            for e in all_employees
+            for e in sorted_emps_for_access
         ]
 
         admin_section = {
@@ -266,6 +325,7 @@ def get_miniapp_context(
         "employee": emp_data,
         "my_slots": my_slots,
         "draft_slots": draft_slots,
+        "my_restrictions": my_restrictions,
         "blackouts": blackouts,
         "departments": depts_list,
         "shifts": shifts_list,
@@ -296,10 +356,113 @@ def add_miniapp_draft_slot(data: MiniAppAddSlotIn, db: Session = Depends(get_db)
     if data.end_date < data.start_date:
         raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
 
+    # Immediate single-slot CSP pre-check so employee sees conflicts right away
+    optimizer = VacationOptimizer(db)
+    conflict_reason = optimizer._get_first_conflict_reason(emp, data.start_date, data.end_date)
+    if conflict_reason:
+        dur = calculate_slot_days(data.start_date, data.end_date)
+        single_alts = []
+        cand_after = optimizer._find_candidate_slot(emp, data.start_date, dur, search_direction=1, max_days=60)
+        if cand_after:
+            single_alts.append({
+                "option": 1,
+                "slots": [{"start": cand_after[0].isoformat(), "end": cand_after[1].isoformat()}],
+                "total_days": dur,
+                "reason": "Ближайшее свободное окно после выбранных дат",
+                "replace_draft": False,
+            })
+        cand_before = optimizer._find_candidate_slot(emp, data.start_date, dur, search_direction=-1, max_days=60)
+        if cand_before and (not cand_after or cand_before[0] != cand_after[0]):
+            single_alts.append({
+                "option": len(single_alts) + 1,
+                "slots": [{"start": cand_before[0].isoformat(), "end": cand_before[1].isoformat()}],
+                "total_days": dur,
+                "reason": "Свободное окно перед выбранными датами",
+                "replace_draft": False,
+            })
+        cand_shift = optimizer._find_candidate_slot(
+            emp, data.start_date + timedelta(days=21), dur, search_direction=1, max_days=60
+        )
+        if cand_shift and all(cand_shift[0].isoformat() != a["slots"][0]["start"] for a in single_alts):
+            single_alts.append({
+                "option": len(single_alts) + 1,
+                "slots": [{"start": cand_shift[0].isoformat(), "end": cand_shift[1].isoformat()}],
+                "total_days": dur,
+                "reason": "Разгруженный период без пересечений со сменой",
+                "replace_draft": False,
+            })
+
+        s_str = data.start_date.strftime("%d.%m.%Y")
+        e_str = data.end_date.strftime("%d.%m.%Y")
+        full_conflict_msg = f"Период {s_str} – {e_str} недоступен: {conflict_reason}"
+        return {
+            "sender": "AGENT",
+            "text": full_conflict_msg,
+            "payload": {
+                "action": "OFFER_ALTERNATIVES",
+                "conflicts": [full_conflict_msg],
+                "violations": [full_conflict_msg],
+                "suggested_alternatives": single_alts,
+            },
+        }
+
     agent = IntakeAgent(db)
     msg_text = f"с {data.start_date.strftime('%d.%m.%Y')} по {data.end_date.strftime('%d.%m.%Y')}"
     res = agent.process_message(emp.id, msg_text, uid)
     return res
+
+
+@router.post("/draft/select-alternative")
+def select_miniapp_alternative(data: MiniAppSelectAlternativeIn, db: Session = Depends(get_db)):
+    uid = data.max_user_id.strip()
+    emp = db.query(Employee).filter(Employee.max_user_id == uid).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Профиль сотрудника не найден")
+    if not getattr(emp, "consent_152fz", False):
+        raise HTTPException(status_code=403, detail="Необходимо дать согласие на обработку ПДн (152-ФЗ)")
+
+    if not data.slots:
+        raise HTTPException(status_code=400, detail="Пустой список периодов")
+
+    # If replacing single period, just pass its dates through IntakeAgent
+    if not data.replace_draft and len(data.slots) == 1:
+        st = date.fromisoformat(data.slots[0]["start"])
+        en = date.fromisoformat(data.slots[0]["end"])
+        agent = IntakeAgent(db)
+        msg_text = f"с {st.strftime('%d.%m.%Y')} по {en.strftime('%d.%m.%Y')}"
+        return agent.process_message(emp.id, msg_text, uid)
+
+    # Full schedule alternative replacement
+    draft = db.query(EmployeeDraft).filter(EmployeeDraft.employee_id == emp.id).first()
+    if not draft:
+        draft = EmployeeDraft(employee_id=emp.id, target_year=2026, slots=[], status="DRAFTING")
+        db.add(draft)
+        db.flush()
+
+    new_slots = []
+    for s in data.slots:
+        st = date.fromisoformat(s["start"])
+        en = date.fromisoformat(s["end"])
+        new_slots.append({
+            "start": st.isoformat(),
+            "end": en.isoformat(),
+            "days": calculate_slot_days(st, en),
+        })
+
+    total_days = sum(x["days"] for x in new_slots)
+    expected_days = emp.total_vacation_days or 36
+    draft.slots = new_slots
+    draft.target_year = date.fromisoformat(new_slots[0]["start"]).year
+    draft.status = "AWAITING_CONFIRMATION" if total_days == expected_days else "DRAFTING"
+    db.commit()
+    return {
+        "sender": "AGENT",
+        "text": "Выбранный вариант добавлен в черновик!",
+        "payload": {
+            "action": draft.status,
+            "draft_slots": new_slots,
+        },
+    }
 
 
 @router.post("/draft/remove")
@@ -321,6 +484,7 @@ def remove_miniapp_draft_slot(data: MiniAppRemoveDraftSlotIn, db: Session = Depe
         if 0 <= data.index < len(slots_copy):
             slots_copy.pop(data.index)
         draft.slots = slots_copy
+        draft.status = "DRAFTING"
     db.commit()
     return {"status": "ok", "draft_slots": draft.slots}
 
@@ -391,7 +555,7 @@ def admin_batch_approve(
         raise HTTPException(status_code=401, detail="Доступ только для администраторов бота")
 
     optimizer = VacationOptimizer(db)
-    result = optimizer.batch_resolve_year(year=data.year)
+    result = optimizer.batch_optimize_all_pending(year=data.year)
     return result
 
 

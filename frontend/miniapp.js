@@ -78,6 +78,7 @@ createApp({
         const employee = ref(null);
         const mySlots = ref([]);
         const draftSlots = ref([]);
+        const myRestrictions = ref([]);
         const blackouts = ref([]);
         const departments = ref([]);
         const shifts = ref([]);
@@ -89,9 +90,9 @@ createApp({
         const formEnd = ref(`${selectedYear.value}-07-14`);
         const alternatives = ref([]);
 
-        // All vacations tab filters
+        // All vacations tab filters: 'my_shift' | 'my_dept' | 'all'
+        const scheduleScope = ref('my_shift');
         const scheduleSearch = ref('');
-        const scheduleShiftFilter = ref('');
         const scheduleMonthFilter = ref(0);
         const monthNames = [
             'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -120,7 +121,6 @@ createApp({
         const loadContext = async (empId = null) => {
             loading.value = true;
             try {
-                // Re-check MAX WebApp bridge in case SDK finished initializing after script load
                 if (!maxUserId.value) {
                     const detected = detectMaxUserId();
                     if (detected) maxUserId.value = detected;
@@ -156,11 +156,16 @@ createApp({
                 employee.value = data.employee || null;
                 mySlots.value = data.my_slots || [];
                 draftSlots.value = data.draft_slots || [];
+                myRestrictions.value = data.my_restrictions || [];
                 blackouts.value = data.blackouts || [];
                 departments.value = data.departments || [];
                 shifts.value = data.shifts || [];
                 companySchedule.value = data.company_schedule || [];
                 adminData.value = data.admin || null;
+
+                if (!employee.value) {
+                    scheduleScope.value = 'all';
+                }
 
                 if (!employee.value && isAdmin.value && activeTab.value === 'my') {
                     activeTab.value = 'admin';
@@ -197,7 +202,18 @@ createApp({
             return diff > 0 ? diff : 0;
         });
 
+        const isReadyToSubmitDraft = computed(() => {
+            if (!employee.value || draftSlots.value.length === 0) return false;
+            return employee.value.remaining_days === 0 && employee.value.has_14_day_block;
+        });
+
+        const pendingAccessCount = computed(() => {
+            if (!adminData.value || !adminData.value.employees_access) return 0;
+            return adminData.value.employees_access.filter(e => e.bot_access === 'PENDING').length;
+        });
+
         const applyDurationPreset = (days) => {
+            if (!days || days <= 0) return;
             if (!formStart.value) {
                 formStart.value = `${selectedYear.value}-07-01`;
             }
@@ -208,7 +224,10 @@ createApp({
 
         const onStartDateChange = () => {
             if (formStart.value && (!formEnd.value || formEnd.value < formStart.value)) {
-                applyDurationPreset(14);
+                const defaultDays = (employee.value && employee.value.remaining_days > 0 && employee.value.remaining_days < 14)
+                    ? employee.value.remaining_days
+                    : 14;
+                applyDurationPreset(defaultDays);
             }
         };
 
@@ -251,8 +270,9 @@ createApp({
                     return;
                 }
                 const p = data.payload || {};
-                if (p.action === 'OFFER_ALTERNATIVES' || (p.violations && p.violations.length > 0)) {
-                    showBanner((p.violations || [data.text]).join('\n'), 'error');
+                const conflictList = p.conflicts || p.violations || [];
+                if (p.action === 'OFFER_ALTERNATIVES' || p.action === 'INVALID_TK' || p.action === 'OVER_LIMIT' || p.action === 'PARSE_ERROR' || conflictList.length > 0) {
+                    showBanner(conflictList.length > 0 ? conflictList.join('\n') : (data.text || 'Проверьте выбранные даты'), 'error');
                     alternatives.value = p.suggested_alternatives || [];
                 } else {
                     showBanner('Период проверен и добавлен в черновик!', 'info');
@@ -264,10 +284,34 @@ createApp({
         };
 
         const selectAlternative = async (alt) => {
-            formStart.value = alt.start;
-            formEnd.value = alt.end;
-            alternatives.value = [];
-            await addPeriodToDraft();
+            if (!maxUserId.value || !alt) return;
+            submitting.value = true;
+            try {
+                const slotsList = Array.isArray(alt.slots) && alt.slots.length > 0
+                    ? alt.slots
+                    : (alt.start && alt.end ? [{ start: alt.start, end: alt.end }] : []);
+                if (slotsList.length === 0) return;
+
+                const res = await fetch(`${API_BASE}/draft/select-alternative`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({
+                        max_user_id: maxUserId.value,
+                        slots: slotsList,
+                        replace_draft: alt.replace_draft !== false,
+                    }),
+                });
+                if (res.ok) {
+                    alternatives.value = [];
+                    showBanner('Свободный вариант добавлен в ваш черновик!', 'info');
+                    await loadContext();
+                } else {
+                    const err = await res.json();
+                    showBanner(err.detail || 'Не удалось применить выбранный вариант', 'error');
+                }
+            } finally {
+                submitting.value = false;
+            }
         };
 
         const removeDraftSlot = async (idx) => {
@@ -277,6 +321,7 @@ createApp({
                 headers: getHeaders(),
                 body: JSON.stringify({ max_user_id: maxUserId.value, index: idx }),
             });
+            alternatives.value = [];
             await loadContext();
         };
 
@@ -302,10 +347,10 @@ createApp({
                 });
                 const data = await res.json();
                 const p = data.payload || {};
-                if (p.action === 'COMMITTED') {
+                if (p.action === 'SUBMISSION_CONFIRMED' || p.action === 'COMMITTED') {
                     showBanner('✅ Заявка успешно отправлена руководителю и добавлена в график!', 'info');
                 } else {
-                    showBanner(data.text || 'Проверьте требования ТК РФ перед отправкой.', 'error');
+                    showBanner(data.text || 'Распределите все 36 дней (с блоком ≥ 14 дн.) перед отправкой.', 'error');
                 }
                 await loadContext();
             } finally {
@@ -328,8 +373,8 @@ createApp({
                 if (res.ok) {
                     showBanner(
                         action === 'APPROVE'
-                            ? '✅ Заявка утверждена! Сотруднику отправлено уведомление в MAX.'
-                            : '❌ Заявка отклонена. Сотруднику отправлено уведомление в MAX.',
+                            ? '✅ Заявка утверждена! Сотруднице отправлено уведомление в MAX.'
+                            : '❌ Заявка отклонена. Сотруднице отправлено уведомление в MAX.',
                         'info'
                     );
                     await loadContext();
@@ -352,7 +397,11 @@ createApp({
                 });
                 if (res.ok) {
                     const data = await res.json();
-                    showBanner(`⚡ Пакетное согласование завершено! Утверждено: ${data.approved_count || 0}, Конфликтов: ${data.conflict_count || 0}`, 'info');
+                    const conflictsCount = data.conflicts_count ?? data.conflict_count ?? 0;
+                    showBanner(
+                        `⚡ Авто-согласование завершено! Утверждено: ${data.approved_count || 0}, Конфликтов: ${conflictsCount}`,
+                        'info'
+                    );
                     await loadContext();
                 }
             } finally {
@@ -375,19 +424,24 @@ createApp({
 
         const filteredCompanySchedule = computed(() => {
             const q = scheduleSearch.value.toLowerCase().trim();
-            const shiftF = scheduleShiftFilter.value;
             const monthF = Number(scheduleMonthFilter.value || 0);
+            const scope = scheduleScope.value;
 
             return companySchedule.value.filter(emp => {
+                if (employee.value) {
+                    if (scope === 'my_shift' && emp.shift !== employee.value.shift) {
+                        return false;
+                    }
+                    if (scope === 'my_dept' && emp.department_id !== employee.value.department_id) {
+                        return false;
+                    }
+                }
                 if (q) {
                     const matchText =
                         emp.full_name.toLowerCase().includes(q) ||
                         emp.role.toLowerCase().includes(q) ||
                         emp.department_name.toLowerCase().includes(q);
                     if (!matchText) return false;
-                }
-                if (shiftF && emp.shift !== shiftF) {
-                    return false;
                 }
                 if (monthF > 0) {
                     const hasSlotInMonth = (emp.slots || []).some(sl => {
@@ -406,6 +460,17 @@ createApp({
             const parts = String(isoStr).split('-');
             if (parts.length !== 3) return isoStr;
             return `${parts[2]}.${parts[1]}.${parts[0]}`;
+        };
+
+        const formatAltSlots = (alt) => {
+            if (!alt) return '';
+            if (Array.isArray(alt.slots) && alt.slots.length > 0) {
+                return alt.slots.map(s => `${formatDateRu(s.start)} – ${formatDateRu(s.end)}`).join(', ');
+            }
+            if (alt.start && alt.end) {
+                return `${formatDateRu(alt.start)} – ${formatDateRu(alt.end)}`;
+            }
+            return '';
         };
 
         const statusLabelRu = (st) => {
@@ -437,6 +502,7 @@ createApp({
             employee,
             mySlots,
             draftSlots,
+            myRestrictions,
             blackouts,
             departments,
             shifts,
@@ -445,11 +511,13 @@ createApp({
             formStart,
             formEnd,
             alternatives,
+            scheduleScope,
             scheduleSearch,
-            scheduleShiftFilter,
             scheduleMonthFilter,
             monthNames,
             computedSelectedDays,
+            isReadyToSubmitDraft,
+            pendingAccessCount,
             filteredCompanySchedule,
             loadContext,
             selectEmployeeFallback,
@@ -466,6 +534,7 @@ createApp({
             runBatchApprove,
             updateBotAccess,
             formatDateRu,
+            formatAltSlots,
             statusLabelRu,
             statusBadgeClass,
         };

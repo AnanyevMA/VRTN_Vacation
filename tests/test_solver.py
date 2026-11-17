@@ -259,3 +259,220 @@ def test_incompatible_employee_groups_conflict_and_alternatives(test_db):
     en = date.fromisoformat(alt["end"])
     assert optimizer.is_slot_valid(w2, st, en) is True
 
+
+def test_personal_incompatible_pairs_conflict_and_alternatives(test_db):
+    dept = test_db.query(Department).first()
+    p1 = Employee(
+        phone="+79701112233",
+        full_name="Напарница Ольга",
+        role="Оператор ВТО",
+        shift="Смена 1 (дневная)",
+        department_id=dept.id,
+        total_vacation_days=36,
+    )
+    p2 = Employee(
+        phone="+79702223344",
+        full_name="Напарница Светлана",
+        role="Контролер ОТК",
+        shift="Смена 2 (вечерняя)",
+        department_id=dept.id,
+        total_vacation_days=36,
+    )
+    test_db.add_all([p1, p2])
+    test_db.commit()
+
+    pair_rule = ScheduleRule(
+        rule_key="personal_incompatible_pairs",
+        rule_type="HARD",
+        parameters={
+            "pairs": [
+                {
+                    "id": "pair1",
+                    "employee_a_id": p1.id,
+                    "employee_b_id": p2.id,
+                    "reason": "Подменяют друг друга на приемке",
+                }
+            ]
+        },
+        is_active=True,
+    )
+    test_db.add(pair_rule)
+
+    slot1 = VacationSlot(
+        employee_id=p1.id,
+        start_date=date(2026, 4, 1),
+        end_date=date(2026, 4, 14),
+        days_count=14,
+        is_primary_block=True,
+        status="APPROVED",
+    )
+    test_db.add(slot1)
+    test_db.commit()
+
+    optimizer = VacationOptimizer(test_db)
+    slots = [
+        {"start": date(2026, 4, 5), "end": date(2026, 4, 18)},
+        {"start": date(2026, 10, 1), "end": date(2026, 10, 22)},
+    ]
+    res = optimizer.validate_and_check_slots(p2.id, slots)
+    assert res["status"] == "CONFLICT"
+    assert any("Напарница Ольга" in v for v in res["violations"])
+    assert any("Подменяют друг друга на приемке" in v for v in res["violations"])
+    assert len(res["suggested_alternatives"]) == 3
+
+    alt = res["suggested_alternatives"][0]["slots"][0]
+    st = date.fromisoformat(alt["start"])
+    en = date.fromisoformat(alt["end"])
+    assert optimizer.is_slot_valid(p2, st, en) is True
+
+
+def test_miniapp_full_role_workflow(test_db):
+    from backend.models import BotAdmin
+    from backend.api.miniapp_routes import (
+        get_miniapp_context,
+        submit_miniapp_consent,
+        add_miniapp_draft_slot,
+        select_miniapp_alternative,
+        remove_miniapp_draft_slot,
+        submit_miniapp_draft,
+        admin_batch_approve,
+        admin_slot_action,
+        MiniAppConsentIn,
+        MiniAppAddSlotIn,
+        MiniAppSelectAlternativeIn,
+        MiniAppRemoveDraftSlotIn,
+        MiniAppSubmitDraftIn,
+        MiniAppAdminBatchIn,
+        MiniAppAdminSlotActionIn,
+    )
+
+    dept = test_db.query(Department).first()
+    emp_a = Employee(
+        phone="+79801112233",
+        max_user_id="uid_emp_a",
+        full_name="Швея Алина",
+        role="Швея (портной)",
+        shift="Смена 1 (дневная)",
+        department_id=dept.id,
+        total_vacation_days=36,
+        consent_152fz=True,
+    )
+    emp_b = Employee(
+        phone="+79802223344",
+        max_user_id="uid_emp_b",
+        full_name="Швея Полина",
+        role="Швея (портной)",
+        shift="Смена 1 (дневная)",
+        department_id=dept.id,
+        total_vacation_days=36,
+        consent_152fz=False,
+    )
+    admin = BotAdmin(
+        phone="+79809998877",
+        max_user_id="uid_admin_boss",
+        full_name="Руководитель Цеха",
+        role_title="Директор производства",
+        is_active=True,
+    )
+    test_db.add_all([emp_a, emp_b, admin])
+    test_db.commit()
+
+    # Personal non-overlapping pair between emp_a and emp_b
+    pair_rule = ScheduleRule(
+        rule_key="personal_incompatible_pairs",
+        rule_type="HARD",
+        parameters={
+            "pairs": [
+                {
+                    "id": "p_ab",
+                    "employee_a_id": emp_a.id,
+                    "employee_b_id": emp_b.id,
+                    "reason": "Сменщицы на закрепочной машине",
+                }
+            ]
+        },
+        is_active=True,
+    )
+    test_db.add(pair_rule)
+
+    # emp_a already has an approved vacation 2026-06-01 .. 2026-06-14
+    slot_a = VacationSlot(
+        employee_id=emp_a.id,
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 14),
+        days_count=14,
+        is_primary_block=True,
+        status="APPROVED",
+    )
+    test_db.add(slot_a)
+    test_db.commit()
+
+    # 1. Context for emp_b includes my_restrictions with emp_a
+    ctx = get_miniapp_context(max_user_id="uid_emp_b", employee_id=None, year=2026, x_admin_token=None, db=test_db)
+    assert ctx["employee"]["full_name"] == "Швея Полина"
+    assert ctx["employee"]["consent_152fz"] is False
+    assert len(ctx["my_restrictions"]) == 1
+    assert ctx["my_restrictions"][0]["partner_name"] == "Швея Алина"
+
+    # 2. Accept 152-FZ consent
+    res_consent = submit_miniapp_consent(MiniAppConsentIn(max_user_id="uid_emp_b", accepted=True), db=test_db)
+    assert res_consent["consent_152fz"] is True
+
+    # 3. Try adding a conflicting single period (overlaps with emp_a 2026-06-05..2026-06-18) -> immediate pre-check catches it!
+    res_conflict = add_miniapp_draft_slot(
+        MiniAppAddSlotIn(max_user_id="uid_emp_b", start_date=date(2026, 6, 5), end_date=date(2026, 6, 18)),
+        db=test_db,
+    )
+    assert res_conflict["payload"]["action"] == "OFFER_ALTERNATIVES"
+    assert len(res_conflict["payload"]["suggested_alternatives"]) >= 1
+
+    # 4. Select single-slot alternative via select_miniapp_alternative
+    first_alt = res_conflict["payload"]["suggested_alternatives"][0]
+    res_alt = select_miniapp_alternative(
+        MiniAppSelectAlternativeIn(
+            max_user_id="uid_emp_b",
+            slots=first_alt["slots"],
+            replace_draft=first_alt.get("replace_draft", False),
+        ),
+        db=test_db,
+    )
+    assert res_alt["payload"]["action"] == "DRAFT_UPDATED"
+    assert res_alt["payload"]["accum_days"] == 14
+
+    # 5. Add second period (22 days in September) -> reaches 36 days (AWAITING_CONFIRMATION)
+    res_add2 = add_miniapp_draft_slot(
+        MiniAppAddSlotIn(max_user_id="uid_emp_b", start_date=date(2026, 9, 1), end_date=date(2026, 9, 22)),
+        db=test_db,
+    )
+    assert res_add2["payload"]["action"] == "AWAITING_CONFIRMATION"
+
+    # 6. Remove second period from draft -> status resets to DRAFTING so first 14-day period is preserved!
+    res_rem = remove_miniapp_draft_slot(
+        MiniAppRemoveDraftSlotIn(max_user_id="uid_emp_b", index=1, reset_all=False),
+        db=test_db,
+    )
+    assert len(res_rem["draft_slots"]) == 1
+
+    # Re-add second period (22 days in October) -> reaches 36 days without wiping first period
+    res_add3 = add_miniapp_draft_slot(
+        MiniAppAddSlotIn(max_user_id="uid_emp_b", start_date=date(2026, 10, 1), end_date=date(2026, 10, 22)),
+        db=test_db,
+    )
+    assert res_add3["payload"]["action"] == "AWAITING_CONFIRMATION"
+    assert len(res_add3["payload"]["draft_slots"]) == 2
+
+    # 7. Submit draft -> returns SUBMISSION_CONFIRMED
+    res_sub = submit_miniapp_draft(MiniAppSubmitDraftIn(max_user_id="uid_emp_b"), db=test_db)
+    assert res_sub["payload"]["action"] == "SUBMISSION_CONFIRMED"
+
+    # 8. Manager batch approve & slot action in Mini App
+    res_batch = admin_batch_approve(
+        MiniAppAdminBatchIn(max_user_id="uid_admin_boss", year=2026),
+        x_admin_token=None,
+        db=test_db,
+    )
+    assert res_batch["success"] is True
+    assert res_batch["approved_count"] == 2
+
+
+
