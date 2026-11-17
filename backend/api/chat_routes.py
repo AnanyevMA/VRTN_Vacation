@@ -25,6 +25,17 @@ RATE_LIMIT_MAX_REQUESTS = 10
 MINIAPP_URL = os.getenv("MINIAPP_URL", "https://46.149.79.201.sslip.io/vacation/miniapp")
 
 
+def build_personal_miniapp_url(user_id: Optional[str] = None, employee_id: Optional[int] = None) -> str:
+    """Builds a direct personal Mini App link so opening in any browser logs the user in immediately."""
+    base = MINIAPP_URL.split("?")[0]
+    params = []
+    if user_id and str(user_id).strip():
+        params.append(f"max_user_id={str(user_id).strip()}")
+    if employee_id:
+        params.append(f"employee_id={employee_id}")
+    return f"{base}?{'&'.join(params)}" if params else base
+
+
 def check_rate_limit(key: str) -> bool:
     """
     In-memory sliding window rate limiter: maximum 10 requests per minute per key.
@@ -609,15 +620,16 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
                     f"[SECURITY] Unverified contact for BotAdmin {admin.full_name} ({mask_phone(payload.phone)}) "
                     f"from user_id={payload.user_id} rejected from binding admin account."
                 )
+            personal_url = build_personal_miniapp_url(payload.user_id)
             reply_text = (
                 f"👑 Здравствуйте, {admin.full_name}!\n"
                 f"Вы авторизованы как администратор бота ({admin.role_title}).\n\n"
                 f"Команды:\n"
                 f"• Напишите «/admin» для просмотра списка сотрудников.\n"
                 f"• Или напишите даты отпуска для планирования графика (например: «с 1 по 14 июля 2026»).\n"
-                f"• Или откройте мини-приложение кнопкой ниже."
+                f"• Или откройте приложение по кнопке ниже."
             )
-            admin_buttons = [{"type": "link", "text": "📱 График и заявки (Мини-приложение)", "url": MINIAPP_URL}]
+            admin_buttons = [{"type": "link", "text": "🌐 Открыть график и заявки", "url": personal_url}]
             max_bot_client.send_message(payload.user_id, reply_text, [admin_buttons], chat_id=chat_id)
             if not is_test:
                 return {"status": "ok"}
@@ -633,8 +645,9 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
                 return {"status": "ok"}
             return {"status": "ok", "recipient_user_id": payload.user_id, "text": msg}
 
-        reply_text = auth_res["message"] + f"\n\nВаш доступный баланс: {auth_res['total_days']} дней.\nНапишите желаемые даты отпуска или откройте мини-приложение."
-        emp_buttons = [{"type": "link", "text": "📱 График отпусков (Мини-приложение)", "url": MINIAPP_URL}]
+        personal_url = build_personal_miniapp_url(payload.user_id, auth_res.get("employee_id"))
+        reply_text = auth_res["message"] + f"\n\nВаш доступный баланс: {auth_res['total_days']} дней.\nНапишите желаемые даты отпуска или откройте приложение по кнопке ниже."
+        emp_buttons = [{"type": "link", "text": "🌐 Открыть мой график отпусков", "url": personal_url}]
         max_bot_client.send_message(payload.user_id, reply_text, [emp_buttons], chat_id=chat_id)
         if not is_test:
             return {"status": "ok"}
@@ -655,8 +668,10 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
             p_text = f"• Ожидают подтверждения номера: {len(pending_emps)}\n"
             if pending_emps:
                 p_text += "\n".join(f"  - {e.full_name} ({e.phone})" for e in pending_emps[:5])
-            reply = f"👑 **Панель администратора MAX:**\nВсего сотрудников в базе: {total_emps}\n{p_text}\n\nВы можете подтверждать номера в веб-дашборде фабрики."
-            max_bot_client.send_message(payload.user_id, reply, chat_id=chat_id)
+            personal_url = build_personal_miniapp_url(payload.user_id)
+            reply = f"👑 **Панель администратора MAX:**\nВсего сотрудников в базе: {total_emps}\n{p_text}\n\nВы можете согласовывать заявки и подтверждать номера в приложении по кнопке ниже."
+            admin_btns = [{"type": "link", "text": "🌐 Открыть пульт руководителя", "url": personal_url}]
+            max_bot_client.send_message(payload.user_id, reply, [admin_btns], chat_id=chat_id)
             if not is_test:
                 return {"status": "ok"}
             return {"status": "ok", "recipient_user_id": payload.user_id, "text": reply}
@@ -684,14 +699,16 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
 
     if not employee:
         if admin:
+            personal_url = build_personal_miniapp_url(payload.user_id)
             reply = (
                 f"👑 Здравствуйте, {admin.full_name}!\n"
                 f"Вы авторизованы как администратор бота ({admin.role_title}).\n\n"
                 f"Команды:\n"
                 f"• Напишите «/admin» для просмотра списка сотрудников.\n"
-                f"(Для планирования личного отпуска добавьте себя в список сотрудников в панели управления)."
+                f"• Нажмите кнопку ниже, чтобы открыть пульт согласования заявок."
             )
-            max_bot_client.send_message(payload.user_id, reply, chat_id=chat_id)
+            admin_btns = [{"type": "link", "text": "🌐 Открыть пульт руководителя", "url": personal_url}]
+            max_bot_client.send_message(payload.user_id, reply, [admin_btns], chat_id=chat_id)
             if not is_test:
                 return {"status": "ok"}
             return {"status": "ok", "recipient_user_id": payload.user_id, "text": reply}
@@ -752,9 +769,13 @@ async def max_messenger_webhook(request: Request, db: Session = Depends(get_db))
         inline_buttons.append({"text": "🔄 Сброс", "callback_data": "сброс"})
 
     if p.get("action") != "CONSENT_REQUEST":
-        inline_buttons.append({"type": "link", "text": "📱 График отпусков (Mini App)", "url": MINIAPP_URL})
+        personal_url = build_personal_miniapp_url(payload.user_id or employee.max_user_id, employee.id)
+        inline_buttons.append({"type": "link", "text": "🌐 Открыть график отпусков", "url": personal_url})
 
     reply_text = response["text"]
+    if p.get("action") in ("GREETING", "CONSENT_GRANTED", "SUBMISSION_CONFIRMED"):
+        personal_url = build_personal_miniapp_url(payload.user_id or employee.max_user_id, employee.id)
+        reply_text += f"\n\n🌐 **Личный кабинет и график отпусков:**\n{personal_url}"
     if admin and p.get("action") == "GREETING" and "👑" not in reply_text:
         reply_text += f"\n\n👑 *Вы авторизованы как администратор ({admin.role_title}).*\nКоманда «/admin» — просмотр сотрудников и статуса."
 

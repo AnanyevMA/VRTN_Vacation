@@ -318,7 +318,8 @@ class IntakeAgent:
         clean_text = message_text.lower().strip()
         if not clean_text or clean_text in [
             "привет", "здравствуйте", "добрый день", "статус", "помощь",
-            "start", "/start", "старт", "/старт", "меню", "запустить", "запуск", "/help", "help", "начать"
+            "start", "/start", "старт", "/старт", "меню", "запустить", "запуск", "/help", "help", "начать",
+            "график", "/график", "отпуск", "/отпуск", "приложение", "кабинет", "/app", "app"
         ]:
             current_slots = draft.slots or [] if draft.status != "COMMITTED" else []
             accum_days = sum(s.get("days", 0) for s in current_slots)
