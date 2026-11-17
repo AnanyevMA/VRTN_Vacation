@@ -365,13 +365,28 @@ class IntakeAgent:
         else:
             current_slots = list(draft.slots or [])
 
+        # Account for already APPROVED slots in the target year (e.g. employee took 14 days earlier and now plans remaining 22)
+        approved_year_slots = (
+            self.db.query(VacationSlot)
+            .filter(
+                VacationSlot.employee_id == employee.id,
+                VacationSlot.status == "APPROVED",
+                VacationSlot.start_date >= date(detected_year, 1, 1),
+                VacationSlot.start_date <= date(detected_year, 12, 31),
+            )
+            .all()
+        )
+        approved_days = sum(s.days_count for s in approved_year_slots)
+        approved_has_14 = any(s.days_count >= 14 for s in approved_year_slots)
+        effective_expected_days = max(0, expected_days - approved_days)
+
         already_drafted_days = sum(s.get("days", 0) for s in current_slots)
-        rem_before = max(0, expected_days - already_drafted_days)
+        rem_before = max(0, effective_expected_days - already_drafted_days)
 
         parsed_slots, llm_comment = llm_service.extract_dates_with_context(
             message_text,
             default_year=detected_year,
-            remaining_days=rem_before if rem_before > 0 else expected_days,
+            remaining_days=rem_before if rem_before > 0 else (effective_expected_days or expected_days),
         )
 
         if not parsed_slots:
@@ -394,12 +409,12 @@ class IntakeAgent:
 
         new_batch_days = sum(u["days"] for u in unique_parsed)
 
-        # If employee sent a complete schedule (e.g. 36 days) in one message while having an incomplete draft,
+        # If employee sent a complete schedule (e.g. 36 days or remaining effective_expected_days) in one message while having an incomplete draft,
         # replace the incomplete draft cleanly instead of causing an artificial OVER_LIMIT error.
-        if current_slots and new_batch_days == expected_days:
+        if current_slots and new_batch_days in (expected_days, effective_expected_days) and new_batch_days > 0:
             current_slots = []
 
-        # Check for self-overlap among the new slots or with existing draft slots
+        # Check for self-overlap among the new slots, existing draft slots, or already APPROVED slots
         temp_slots = list(current_slots)
         for u in unique_parsed:
             u_st, u_en = u["start"], u["end"]
@@ -408,12 +423,17 @@ class IntakeAgent:
                 continue
 
             overlap_slot = None
-            for s in temp_slots:
-                s_st = date.fromisoformat(s["start"])
-                s_en = date.fromisoformat(s["end"])
-                if max(u_st, s_st) <= min(u_en, s_en):
-                    overlap_slot = (s_st, s_en)
+            for ap in approved_year_slots:
+                if max(u_st, ap.start_date) <= min(u_en, ap.end_date):
+                    overlap_slot = (ap.start_date, ap.end_date)
                     break
+            if not overlap_slot:
+                for s in temp_slots:
+                    s_st = date.fromisoformat(s["start"])
+                    s_en = date.fromisoformat(s["end"])
+                    if max(u_st, s_st) <= min(u_en, s_en):
+                        overlap_slot = (s_st, s_en)
+                        break
 
             if overlap_slot:
                 ov_st, ov_en = overlap_slot
@@ -434,39 +454,43 @@ class IntakeAgent:
         draft.target_year = detected_year
         draft.slots = current_slots
         accum_days = sum(s["days"] for s in current_slots)
-        rem_days = expected_days - accum_days
+        total_with_approved = accum_days + approved_days
+        rem_days = expected_days - total_with_approved
         comment_prefix = f"💡 {llm_comment}\n\n" if llm_comment else ""
 
-        # Case 1: Incomplete accumulation (accum_days < expected_days)
-        if accum_days < expected_days:
+        # Case 1: Incomplete accumulation (total_with_approved < expected_days)
+        if total_with_approved < expected_days:
             lines = [f"• {date.fromisoformat(s['start']).strftime('%d.%m.%Y')} – {date.fromisoformat(s['end']).strftime('%d.%m.%Y')} ({s['days']} дн.)" for s in current_slots]
-            has_14 = any(s["days"] >= 14 for s in current_slots)
+            has_14 = approved_has_14 or any(s["days"] >= 14 for s in current_slots)
             hint_14 = "" if has_14 else " (один из блоков должен быть не менее 14 дней)"
 
             response_text = (
                 f"{comment_prefix}✍️ **Записано в черновик:**\n\n"
                 + "\n".join(lines)
-                + f"\n\n📊 Набрано: **{accum_days} из {expected_days} дн.** (осталось распределить: **{rem_days} дн.**{hint_14}).\n"
+                + f"\n\n📊 Набрано: **{total_with_approved} из {expected_days} дн.** (осталось распределить: **{rem_days} дн.**{hint_14}).\n"
                 f"👉 Отправьте следующий период отпуска."
             )
             draft.status = "DRAFTING"
             self.db.commit()
             return self._reply(employee.id, response_text, {"action": "DRAFT_UPDATED", "draft_slots": current_slots, "accum_days": accum_days, "rem_days": rem_days})
 
-        # Case 2: Over limit (accum_days > expected_days)
-        if accum_days > expected_days:
+        # Case 2: Over limit (total_with_approved > expected_days)
+        if total_with_approved > expected_days:
             lines = [f"• {date.fromisoformat(s['start']).strftime('%d.%m.%Y')} – {date.fromisoformat(s['end']).strftime('%d.%m.%Y')} ({s['days']} дн.)" for s in current_slots]
             response_text = (
                 f"⚠️ {first_name}, превышен лимит дней отпуска!\n\n"
                 + "\n".join(lines)
-                + f"\n\nСумма: **{accum_days} дн.** при вашей норме **{expected_days} дн.** (превышение на {accum_days - expected_days} дн.).\n"
-                f"Напишите *«Сброс»*, чтобы очистить черновик и ввести корректные даты."
+                + f"\n\nСумма: **{total_with_approved} дн.** при вашей норме **{expected_days} дн.** (превышение на {total_with_approved - expected_days} дн.).\n"
+                f"Напишите *«Сброс»* или нажмите **«✏️ Изменить»** в мини-приложении, чтобы поправить даты."
             )
             self.db.commit()
             return self._reply(employee.id, response_text, {"action": "OVER_LIMIT", "draft_slots": current_slots})
 
-        # Case 3: Exactly accumulated (accum_days == expected_days) -> Run Solver & Present Preview!
-        slots_to_test = [{"start": date.fromisoformat(s["start"]), "end": date.fromisoformat(s["end"])} for s in current_slots]
+        # Case 3: Exactly accumulated (total_with_approved == expected_days) -> Run Solver & Present Preview!
+        slots_to_test = (
+            [{"start": ap.start_date, "end": ap.end_date} for ap in approved_year_slots]
+            + [{"start": date.fromisoformat(s["start"]), "end": date.fromisoformat(s["end"])} for s in current_slots]
+        )
         opt_result = self.solver_agent.run_vacation_optimizer(
             employee_id=employee.id,
             requested_slots=slots_to_test,
@@ -484,7 +508,8 @@ class IntakeAgent:
                 f"{comment_prefix}📋 **Проверьте ваш итоговый график перед отправкой:**\n\n"
                 + "\n".join(lines)
                 + f"\n\n"
-                f"✨ Итог: **{expected_days} дн.** (блок 14+ соблюден, пересечений с коллегами и ограничений нет ✅)\n\n"
+                f"✨ Итог: **{expected_days} дн.** (блок 14+ соблюден, пересечений с коллегами и ограничений нет ✅)\n"
+                f"✏️ *Вы можете изменить даты любого периода в мини-приложении перед отправкой.*\n\n"
                 f"**Подтвердите отправку руководителю:**"
             )
             return self._reply(

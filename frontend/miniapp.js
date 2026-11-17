@@ -85,9 +85,11 @@ createApp({
         const companySchedule = ref([]);
         const adminData = ref(null);
 
-        // Date form state
+        // Date form & editing state
         const formStart = ref(`${selectedYear.value}-07-01`);
         const formEnd = ref(`${selectedYear.value}-07-14`);
+        const lastPresetDays = ref(14);
+        const editingDraftIndex = ref(null);
         const alternatives = ref([]);
 
         // All vacations tab filters: 'my_shift' | 'my_dept' | 'all'
@@ -190,6 +192,7 @@ createApp({
             selectedYear.value = yr;
             formStart.value = `${yr}-07-01`;
             formEnd.value = `${yr}-07-14`;
+            editingDraftIndex.value = null;
             alternatives.value = [];
             await loadContext();
         };
@@ -202,9 +205,21 @@ createApp({
             return diff > 0 ? diff : 0;
         });
 
+        const availableDaysForCurrentEdit = computed(() => {
+            if (!employee.value) return 0;
+            if (editingDraftIndex.value !== null && draftSlots.value[editingDraftIndex.value]) {
+                return employee.value.remaining_days + draftSlots.value[editingDraftIndex.value].days;
+            }
+            return employee.value.remaining_days;
+        });
+
         const isReadyToSubmitDraft = computed(() => {
             if (!employee.value || draftSlots.value.length === 0) return false;
             return employee.value.remaining_days === 0 && employee.value.has_14_day_block;
+        });
+
+        const hasEditableSubmittedSlots = computed(() => {
+            return mySlots.value.some(s => s.status !== 'APPROVED');
         });
 
         const pendingAccessCount = computed(() => {
@@ -214,6 +229,7 @@ createApp({
 
         const applyDurationPreset = (days) => {
             if (!days || days <= 0) return;
+            lastPresetDays.value = days;
             if (!formStart.value) {
                 formStart.value = `${selectedYear.value}-07-01`;
             }
@@ -223,12 +239,33 @@ createApp({
         };
 
         const onStartDateChange = () => {
-            if (formStart.value && (!formEnd.value || formEnd.value < formStart.value)) {
-                const defaultDays = (employee.value && employee.value.remaining_days > 0 && employee.value.remaining_days < 14)
-                    ? employee.value.remaining_days
-                    : 14;
-                applyDurationPreset(defaultDays);
-            }
+            if (!formStart.value) return;
+            const targetDays = lastPresetDays.value > 0
+                ? lastPresetDays.value
+                : ((employee.value && employee.value.remaining_days > 0 && employee.value.remaining_days < 14) ? employee.value.remaining_days : 14);
+            applyDurationPreset(targetDays);
+        };
+
+        const startEditDraftSlot = (idx, slot) => {
+            editingDraftIndex.value = idx;
+            formStart.value = slot.start;
+            formEnd.value = slot.end;
+            lastPresetDays.value = slot.days || 14;
+            alternatives.value = [];
+            statusBanner.value.text = '';
+            nextTick(() => {
+                const pickerEl = document.getElementById('miniapp-date-picker');
+                if (pickerEl && typeof pickerEl.scrollIntoView === 'function') {
+                    pickerEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                refreshIcons();
+            });
+        };
+
+        const cancelEditDraftSlot = () => {
+            editingDraftIndex.value = null;
+            alternatives.value = [];
+            refreshIcons();
         };
 
         const acceptConsent = async () => {
@@ -249,24 +286,35 @@ createApp({
             }
         };
 
-        const addPeriodToDraft = async () => {
+        const savePeriodToDraft = async () => {
             if (!maxUserId.value || !formStart.value || !formEnd.value) return;
             submitting.value = true;
             alternatives.value = [];
             statusBanner.value.text = '';
+            const isEdit = editingDraftIndex.value !== null;
+            const endpoint = isEdit ? `${API_BASE}/draft/update` : `${API_BASE}/draft/add`;
+            const bodyPayload = isEdit
+                ? {
+                    max_user_id: maxUserId.value,
+                    index: editingDraftIndex.value,
+                    start_date: formStart.value,
+                    end_date: formEnd.value,
+                }
+                : {
+                    max_user_id: maxUserId.value,
+                    start_date: formStart.value,
+                    end_date: formEnd.value,
+                };
+
             try {
-                const res = await fetch(`${API_BASE}/draft/add`, {
+                const res = await fetch(endpoint, {
                     method: 'POST',
                     headers: getHeaders(),
-                    body: JSON.stringify({
-                        max_user_id: maxUserId.value,
-                        start_date: formStart.value,
-                        end_date: formEnd.value,
-                    }),
+                    body: JSON.stringify(bodyPayload),
                 });
                 const data = await res.json();
                 if (!res.ok) {
-                    showBanner(data.detail || 'Ошибка при добавлении периода', 'error');
+                    showBanner(data.detail || 'Ошибка сохранения периода', 'error');
                     return;
                 }
                 const p = data.payload || {};
@@ -275,13 +323,20 @@ createApp({
                     showBanner(conflictList.length > 0 ? conflictList.join('\n') : (data.text || 'Проверьте выбранные даты'), 'error');
                     alternatives.value = p.suggested_alternatives || [];
                 } else {
-                    showBanner('Период проверен и добавлен в черновик!', 'info');
+                    if (isEdit) {
+                        editingDraftIndex.value = null;
+                        showBanner('✏️ Даты периода успешно изменены в черновике!', 'info');
+                    } else {
+                        showBanner('Период проверен и добавлен в черновик!', 'info');
+                    }
                 }
                 await loadContext();
             } finally {
                 submitting.value = false;
             }
         };
+
+        const addPeriodToDraft = savePeriodToDraft;
 
         const selectAlternative = async (alt) => {
             if (!maxUserId.value || !alt) return;
@@ -292,6 +347,10 @@ createApp({
                     : (alt.start && alt.end ? [{ start: alt.start, end: alt.end }] : []);
                 if (slotsList.length === 0) return;
 
+                const editIdx = alt.edit_index !== undefined && alt.edit_index !== null
+                    ? alt.edit_index
+                    : editingDraftIndex.value;
+
                 const res = await fetch(`${API_BASE}/draft/select-alternative`, {
                     method: 'POST',
                     headers: getHeaders(),
@@ -299,11 +358,13 @@ createApp({
                         max_user_id: maxUserId.value,
                         slots: slotsList,
                         replace_draft: alt.replace_draft !== false,
+                        edit_index: editIdx,
                     }),
                 });
                 if (res.ok) {
                     alternatives.value = [];
-                    showBanner('Свободный вариант добавлен в ваш черновик!', 'info');
+                    editingDraftIndex.value = null;
+                    showBanner('Свободный вариант применен в ваш черновик!', 'info');
                     await loadContext();
                 } else {
                     const err = await res.json();
@@ -316,6 +377,9 @@ createApp({
 
         const removeDraftSlot = async (idx) => {
             if (!maxUserId.value) return;
+            if (editingDraftIndex.value === idx) {
+                editingDraftIndex.value = null;
+            }
             await fetch(`${API_BASE}/draft/remove`, {
                 method: 'POST',
                 headers: getHeaders(),
@@ -327,6 +391,7 @@ createApp({
 
         const clearDraft = async () => {
             if (!maxUserId.value) return;
+            editingDraftIndex.value = null;
             await fetch(`${API_BASE}/draft/remove`, {
                 method: 'POST',
                 headers: getHeaders(),
@@ -336,9 +401,38 @@ createApp({
             await loadContext();
         };
 
+        const recallSubmittedSlots = async (slotId = null) => {
+            if (!maxUserId.value) return;
+            submitting.value = true;
+            try {
+                const res = await fetch(`${API_BASE}/slots/recall`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({
+                        max_user_id: maxUserId.value,
+                        year: selectedYear.value,
+                        slot_id: slotId,
+                    }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    showBanner(data.detail || 'Не удалось вернуть периоды в черновик', 'error');
+                    return;
+                }
+                showBanner('✏️ Заявка возвращена в черновик! Нажмите «Изменить» у нужного периода, чтобы поправить даты.', 'info');
+                await loadContext();
+                if (draftSlots.value.length > 0) {
+                    startEditDraftSlot(0, draftSlots.value[0]);
+                }
+            } finally {
+                submitting.value = false;
+            }
+        };
+
         const submitDraft = async () => {
             if (!maxUserId.value) return;
             submitting.value = true;
+            editingDraftIndex.value = null;
             try {
                 const res = await fetch(`${API_BASE}/draft/submit`, {
                     method: 'POST',
@@ -518,6 +612,9 @@ createApp({
             adminData,
             formStart,
             formEnd,
+            editingDraftIndex,
+            availableDaysForCurrentEdit,
+            hasEditableSubmittedSlots,
             alternatives,
             scheduleScope,
             scheduleSearch,
@@ -532,11 +629,15 @@ createApp({
             changeYear,
             applyDurationPreset,
             onStartDateChange,
+            startEditDraftSlot,
+            cancelEditDraftSlot,
+            savePeriodToDraft,
             acceptConsent,
             addPeriodToDraft,
             selectAlternative,
             removeDraftSlot,
             clearDraft,
+            recallSubmittedSlots,
             submitDraft,
             handleSlotAction,
             runBatchApprove,

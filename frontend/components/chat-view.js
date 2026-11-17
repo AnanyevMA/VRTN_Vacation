@@ -138,6 +138,18 @@ window.ChatView = {
                         :style="{ width: draftProgressPct + '%' }">
                     </div>
                 </div>
+                <!-- Draft Period Pills with Quick Edit -->
+                <div class="flex flex-wrap items-center gap-1.5 mt-2">
+                    <button
+                        v-for="(ds, idx) in draftSlots"
+                        :key="idx"
+                        type="button"
+                        @click="$emit('set-input-text', 'с ' + formatDateShort(ds.start) + ' по ' + formatDateShort(ds.end))"
+                        class="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-[10px] text-slate-200 flex items-center gap-1 transition"
+                        title="Нажмите, чтобы скопировать даты в строку ввода и изменить">
+                        <span>✏️ {{ formatDateShort(ds.start) }}–{{ formatDateShort(ds.end) }} ({{ ds.days }}д)</span>
+                    </button>
+                </div>
             </div>
 
             <!-- Messages Scroll Area -->

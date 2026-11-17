@@ -32,6 +32,20 @@ class MiniAppSelectAlternativeIn(BaseModel):
     max_user_id: str = Field(..., min_length=1, max_length=128)
     slots: List[Dict[str, str]]
     replace_draft: bool = True
+    edit_index: Optional[int] = None
+
+
+class MiniAppUpdateDraftSlotIn(BaseModel):
+    max_user_id: str = Field(..., min_length=1, max_length=128)
+    index: int = Field(..., ge=0)
+    start_date: date
+    end_date: date
+
+
+class MiniAppRecallSlotsIn(BaseModel):
+    max_user_id: str = Field(..., min_length=1, max_length=128)
+    year: int = Field(2026, ge=2025, le=2035)
+    slot_id: Optional[int] = None
 
 
 class MiniAppRemoveDraftSlotIn(BaseModel):
@@ -424,7 +438,21 @@ def select_miniapp_alternative(data: MiniAppSelectAlternativeIn, db: Session = D
     if not data.slots:
         raise HTTPException(status_code=400, detail="Пустой список периодов")
 
-    # If replacing single period, just pass its dates through IntakeAgent
+    # If editing a specific index in draft via alternative button
+    if data.edit_index is not None and len(data.slots) == 1:
+        st = date.fromisoformat(data.slots[0]["start"])
+        en = date.fromisoformat(data.slots[0]["end"])
+        return update_miniapp_draft_slot(
+            MiniAppUpdateDraftSlotIn(
+                max_user_id=uid,
+                index=data.edit_index,
+                start_date=st,
+                end_date=en,
+            ),
+            db=db,
+        )
+
+    # If adding a single period, pass its dates through IntakeAgent
     if not data.replace_draft and len(data.slots) == 1:
         st = date.fromisoformat(data.slots[0]["start"])
         en = date.fromisoformat(data.slots[0]["end"])
@@ -449,10 +477,22 @@ def select_miniapp_alternative(data: MiniAppSelectAlternativeIn, db: Session = D
             "days": calculate_slot_days(st, en),
         })
 
-    total_days = sum(x["days"] for x in new_slots)
+    target_year = date.fromisoformat(new_slots[0]["start"]).year
+    approved_days = sum(
+        s.days_count
+        for s in db.query(VacationSlot)
+        .filter(
+            VacationSlot.employee_id == emp.id,
+            VacationSlot.status == "APPROVED",
+            VacationSlot.start_date >= date(target_year, 1, 1),
+            VacationSlot.start_date <= date(target_year, 12, 31),
+        )
+        .all()
+    )
+    total_days = sum(x["days"] for x in new_slots) + approved_days
     expected_days = emp.total_vacation_days or 36
     draft.slots = new_slots
-    draft.target_year = date.fromisoformat(new_slots[0]["start"]).year
+    draft.target_year = target_year
     draft.status = "AWAITING_CONFIRMATION" if total_days == expected_days else "DRAFTING"
     db.commit()
     return {
@@ -462,6 +502,193 @@ def select_miniapp_alternative(data: MiniAppSelectAlternativeIn, db: Session = D
             "action": draft.status,
             "draft_slots": new_slots,
         },
+    }
+
+
+@router.post("/draft/update")
+def update_miniapp_draft_slot(data: MiniAppUpdateDraftSlotIn, db: Session = Depends(get_db)):
+    uid = data.max_user_id.strip()
+    emp = db.query(Employee).filter(Employee.max_user_id == uid).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Профиль сотрудника не найден")
+    if not getattr(emp, "consent_152fz", False):
+        raise HTTPException(status_code=403, detail="Необходимо дать согласие на обработку ПДн (152-ФЗ)")
+    if data.end_date < data.start_date:
+        raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
+
+    draft = db.query(EmployeeDraft).filter(EmployeeDraft.employee_id == emp.id).first()
+    if not draft or not isinstance(draft.slots, list) or not (0 <= data.index < len(draft.slots)):
+        raise HTTPException(status_code=404, detail="Редактируемый период не найден в черновике")
+
+    target_year = data.start_date.year
+    approved_slots = (
+        db.query(VacationSlot)
+        .filter(
+            VacationSlot.employee_id == emp.id,
+            VacationSlot.status == "APPROVED",
+            VacationSlot.start_date >= date(target_year, 1, 1),
+            VacationSlot.start_date <= date(target_year, 12, 31),
+        )
+        .all()
+    )
+
+    # 1. Check self-overlap with OTHER slots in draft or already APPROVED slots
+    for ap in approved_slots:
+        if max(data.start_date, ap.start_date) <= min(data.end_date, ap.end_date):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Новые даты пересекаются с вашим уже утвержденным отпуском ({ap.start_date.strftime('%d.%m.%Y')}–{ap.end_date.strftime('%d.%m.%Y')})",
+            )
+
+    for idx, s in enumerate(draft.slots):
+        if idx == data.index:
+            continue
+        s_st = date.fromisoformat(s["start"])
+        s_en = date.fromisoformat(s["end"])
+        if max(data.start_date, s_st) <= min(data.end_date, s_en):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Новые даты накладываются на другой период в вашем черновике ({s_st.strftime('%d.%m.%Y')}–{s_en.strftime('%d.%m.%Y')})",
+            )
+
+    # 2. Check CSP solver rules (blackouts, role/shift quotas, personal incompatible pairs)
+    optimizer = VacationOptimizer(db)
+    conflict_reason = optimizer._get_first_conflict_reason(emp, data.start_date, data.end_date)
+    if conflict_reason:
+        dur = calculate_slot_days(data.start_date, data.end_date)
+        single_alts = []
+        cand_after = optimizer._find_candidate_slot(emp, data.start_date, dur, search_direction=1, max_days=60)
+        if cand_after:
+            single_alts.append({
+                "option": 1,
+                "slots": [{"start": cand_after[0].isoformat(), "end": cand_after[1].isoformat()}],
+                "total_days": dur,
+                "reason": "Ближайшее свободное окно после выбранных дат",
+                "replace_draft": False,
+                "edit_index": data.index,
+            })
+        cand_before = optimizer._find_candidate_slot(emp, data.start_date, dur, search_direction=-1, max_days=60)
+        if cand_before and (not cand_after or cand_before[0] != cand_after[0]):
+            single_alts.append({
+                "option": len(single_alts) + 1,
+                "slots": [{"start": cand_before[0].isoformat(), "end": cand_before[1].isoformat()}],
+                "total_days": dur,
+                "reason": "Свободное окно перед выбранными датами",
+                "replace_draft": False,
+                "edit_index": data.index,
+            })
+        s_str = data.start_date.strftime("%d.%m.%Y")
+        e_str = data.end_date.strftime("%d.%m.%Y")
+        full_conflict_msg = f"Период {s_str} – {e_str} недоступен: {conflict_reason}"
+        return {
+            "sender": "AGENT",
+            "text": full_conflict_msg,
+            "payload": {
+                "action": "OFFER_ALTERNATIVES",
+                "conflicts": [full_conflict_msg],
+                "violations": [full_conflict_msg],
+                "suggested_alternatives": single_alts,
+                "draft_slots": draft.slots,
+            },
+        }
+
+    # 3. Update the slot in place
+    new_dur = calculate_slot_days(data.start_date, data.end_date)
+    slots_copy = list(draft.slots)
+    slots_copy[data.index] = {
+        "start": data.start_date.isoformat(),
+        "end": data.end_date.isoformat(),
+        "days": new_dur,
+    }
+    expected_days = emp.total_vacation_days or 36
+    approved_days = sum(s.days_count for s in approved_slots)
+    total_days = approved_days + sum(s["days"] for s in slots_copy)
+
+    if total_days > expected_days:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Превышен лимит дней отпуска: получилось {total_days} дн. при норме {expected_days} дн. (лишних: {total_days - expected_days} дн.)",
+        )
+
+    has_14 = any(s.days_count >= 14 for s in approved_slots) or any(s["days"] >= 14 for s in slots_copy)
+    draft.slots = slots_copy
+    draft.target_year = target_year
+    draft.status = "AWAITING_CONFIRMATION" if (total_days == expected_days and has_14) else "DRAFTING"
+    db.commit()
+
+    return {
+        "sender": "AGENT",
+        "text": "Даты периода успешно обновлены в черновике!",
+        "payload": {
+            "action": draft.status,
+            "draft_slots": draft.slots,
+        },
+    }
+
+
+@router.post("/slots/recall")
+def recall_submitted_slots_to_draft(data: MiniAppRecallSlotsIn, db: Session = Depends(get_db)):
+    """Moves unapproved (REQUESTED / CONFLICT / REVISED) slots back into the employee's draft for easy editing."""
+    uid = data.max_user_id.strip()
+    emp = db.query(Employee).filter(Employee.max_user_id == uid).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Профиль сотрудника не найден")
+
+    q = db.query(VacationSlot).filter(
+        VacationSlot.employee_id == emp.id,
+        VacationSlot.status.in_(["REQUESTED", "CONFLICT", "REVISED", "PENDING", "NEEDS_APPROVAL"]),
+        VacationSlot.start_date >= date(data.year, 1, 1),
+        VacationSlot.start_date <= date(data.year, 12, 31),
+    )
+    if data.slot_id:
+        q = q.filter(VacationSlot.id == data.slot_id)
+
+    recalled_slots = q.order_by(VacationSlot.start_date.asc()).all()
+    if not recalled_slots:
+        raise HTTPException(status_code=400, detail="Нет отправленных периодов на согласовании для возврата в черновик")
+
+    draft = db.query(EmployeeDraft).filter(EmployeeDraft.employee_id == emp.id).first()
+    if not draft:
+        draft = EmployeeDraft(employee_id=emp.id, target_year=data.year, slots=[], status="DRAFTING")
+        db.add(draft)
+        db.flush()
+
+    existing_draft = list(draft.slots or []) if draft.status != "COMMITTED" else []
+    for sl in recalled_slots:
+        st_iso = sl.start_date.isoformat()
+        en_iso = sl.end_date.isoformat()
+        if not any(d["start"] == st_iso and d["end"] == en_iso for d in existing_draft):
+            existing_draft.append({
+                "start": st_iso,
+                "end": en_iso,
+                "days": sl.days_count,
+            })
+        db.delete(sl)
+
+    existing_draft.sort(key=lambda x: x["start"])
+    approved_slots = (
+        db.query(VacationSlot)
+        .filter(
+            VacationSlot.employee_id == emp.id,
+            VacationSlot.status == "APPROVED",
+            VacationSlot.start_date >= date(data.year, 1, 1),
+            VacationSlot.start_date <= date(data.year, 12, 31),
+        )
+        .all()
+    )
+    expected_days = emp.total_vacation_days or 36
+    total_days = sum(s.days_count for s in approved_slots) + sum(d["days"] for d in existing_draft)
+    has_14 = any(s.days_count >= 14 for s in approved_slots) or any(d["days"] >= 14 for d in existing_draft)
+
+    draft.slots = existing_draft
+    draft.target_year = data.year
+    draft.status = "AWAITING_CONFIRMATION" if (total_days == expected_days and has_14) else "DRAFTING"
+    db.commit()
+
+    return {
+        "status": "ok",
+        "message": "Периоды возвращены в черновик. Нажмите «✏️ Изменить» у нужного периода, чтобы поправить даты.",
+        "draft_slots": draft.slots,
     }
 
 

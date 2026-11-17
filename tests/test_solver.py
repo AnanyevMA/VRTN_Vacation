@@ -475,4 +475,119 @@ def test_miniapp_full_role_workflow(test_db):
     assert res_batch["approved_count"] == 2
 
 
+def test_miniapp_edit_draft_and_recall_submitted_slots(test_db):
+    from backend.api.miniapp_routes import (
+        add_miniapp_draft_slot,
+        update_miniapp_draft_slot,
+        recall_submitted_slots_to_draft,
+        submit_miniapp_draft,
+        MiniAppAddSlotIn,
+        MiniAppUpdateDraftSlotIn,
+        MiniAppRecallSlotsIn,
+        MiniAppSubmitDraftIn,
+    )
+
+    dept = test_db.query(Department).first()
+
+    # Persona 1 & 2: Employee edits period in draft before submission, and recalls submitted unapproved slots
+    emp_edit = Employee(
+        phone="+79811112233",
+        max_user_id="uid_emp_edit",
+        full_name="Швея Татьяна",
+        role="Швея (портной)",
+        shift="Смена 1 (дневная)",
+        department_id=dept.id,
+        total_vacation_days=36,
+        consent_152fz=True,
+    )
+    # Persona 3: Employee who already has 14 APPROVED days and plans remaining 22 days
+    emp_partial = Employee(
+        phone="+79812223344",
+        max_user_id="uid_emp_partial",
+        full_name="Закройщик Галина",
+        role="Закройщик",
+        shift="Смена 2 (вечерняя)",
+        department_id=dept.id,
+        total_vacation_days=36,
+        consent_152fz=True,
+    )
+    test_db.add_all([emp_edit, emp_partial])
+    test_db.commit()
+
+    # Add 14 + 22 = 36 days to draft for emp_edit
+    add_miniapp_draft_slot(
+        MiniAppAddSlotIn(max_user_id="uid_emp_edit", start_date=date(2026, 7, 1), end_date=date(2026, 7, 14)),
+        db=test_db,
+    )
+    res_36 = add_miniapp_draft_slot(
+        MiniAppAddSlotIn(max_user_id="uid_emp_edit", start_date=date(2026, 9, 1), end_date=date(2026, 9, 22)),
+        db=test_db,
+    )
+    assert res_36["payload"]["action"] == "AWAITING_CONFIRMATION"
+
+    # Edit second period in-place (shift September vacation to 05.09..26.09)
+    res_upd = update_miniapp_draft_slot(
+        MiniAppUpdateDraftSlotIn(
+            max_user_id="uid_emp_edit",
+            index=1,
+            start_date=date(2026, 9, 5),
+            end_date=date(2026, 9, 26),
+        ),
+        db=test_db,
+    )
+    assert res_upd["payload"]["action"] == "AWAITING_CONFIRMATION"
+    assert res_upd["payload"]["draft_slots"][1]["start"] == "2026-09-05"
+    assert res_upd["payload"]["draft_slots"][1]["end"] == "2026-09-26"
+
+    # Submit draft -> creates 2 REQUESTED slots
+    res_sub = submit_miniapp_draft(MiniAppSubmitDraftIn(max_user_id="uid_emp_edit"), db=test_db)
+    assert res_sub["payload"]["action"] == "SUBMISSION_CONFIRMED"
+
+    # Recall unapproved slots back to draft for editing
+    res_recall = recall_submitted_slots_to_draft(
+        MiniAppRecallSlotsIn(max_user_id="uid_emp_edit", year=2026),
+        db=test_db,
+    )
+    assert res_recall["status"] == "ok"
+    assert len(res_recall["draft_slots"]) == 2
+    assert test_db.query(VacationSlot).filter(VacationSlot.employee_id == emp_edit.id).count() == 0
+
+    # Edit after recall and submit again
+    update_miniapp_draft_slot(
+        MiniAppUpdateDraftSlotIn(
+            max_user_id="uid_emp_edit",
+            index=1,
+            start_date=date(2026, 10, 1),
+            end_date=date(2026, 10, 22),
+        ),
+        db=test_db,
+    )
+    res_sub2 = submit_miniapp_draft(MiniAppSubmitDraftIn(max_user_id="uid_emp_edit"), db=test_db)
+    assert res_sub2["payload"]["action"] == "SUBMISSION_CONFIRMED"
+
+    # Persona 3 test: emp_partial already has 14 APPROVED days in May 2026
+    approved_slot = VacationSlot(
+        employee_id=emp_partial.id,
+        start_date=date(2026, 5, 1),
+        end_date=date(2026, 5, 14),
+        days_count=14,
+        is_primary_block=True,
+        status="APPROVED",
+    )
+    test_db.add(approved_slot)
+    test_db.commit()
+
+    # Adding remaining 22 days in October 2026 reaches 14 + 22 = 36 days -> AWAITING_CONFIRMATION!
+    res_p3 = add_miniapp_draft_slot(
+        MiniAppAddSlotIn(max_user_id="uid_emp_partial", start_date=date(2026, 10, 5), end_date=date(2026, 10, 26)),
+        db=test_db,
+    )
+    assert res_p3["payload"]["action"] == "AWAITING_CONFIRMATION"
+    res_p3_sub = submit_miniapp_draft(MiniAppSubmitDraftIn(max_user_id="uid_emp_partial"), db=test_db)
+    assert res_p3_sub["payload"]["action"] == "SUBMISSION_CONFIRMED"
+    emp_partial_slots = test_db.query(VacationSlot).filter(VacationSlot.employee_id == emp_partial.id).all()
+    assert sum(s.days_count for s in emp_partial_slots) == 36
+
+
+
 

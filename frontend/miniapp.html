@@ -178,16 +178,26 @@
                 </button>
             </div>
 
-            <!-- STEP 3: Date Picker (only shown when consent is given and remaining_days > 0 or alternatives exist) -->
-            <div v-if="employee.consent_152fz && (employee.remaining_days > 0 || alternatives.length > 0)" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-                <div class="flex items-center justify-between">
+            <!-- STEP 3: Date Picker / Period Editor -->
+            <div v-if="employee.consent_152fz && (employee.remaining_days > 0 || editingDraftIndex !== null || alternatives.length > 0)"
+                 id="miniapp-date-picker"
+                 class="bg-slate-900 rounded-2xl p-4 space-y-3 transition-all"
+                 :class="editingDraftIndex !== null ? 'border-2 border-indigo-500 shadow-lg shadow-indigo-500/10' : 'border border-slate-800'">
+                <div class="flex items-center justify-between gap-2">
                     <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
-                        <i data-lucide="calendar-plus" class="w-4 h-4 text-indigo-400"></i>
-                        <span>Выбрать период отпуска ({{ selectedYear }})</span>
+                        <i :data-lucide="editingDraftIndex !== null ? 'pencil' : 'calendar-plus'" class="w-4 h-4 text-indigo-400"></i>
+                        <span v-if="editingDraftIndex !== null">✏️ Изменить даты периода №{{ editingDraftIndex + 1 }}</span>
+                        <span v-else>Выбрать период отпуска ({{ selectedYear }})</span>
                     </h3>
-                    <span v-if="computedSelectedDays > 0" class="text-xs font-bold px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300">
-                        {{ computedSelectedDays }} дн.
-                    </span>
+                    <div class="flex items-center gap-1.5">
+                        <span v-if="computedSelectedDays > 0" class="text-xs font-bold px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300">
+                            {{ computedSelectedDays }} дн.
+                        </span>
+                        <button v-if="editingDraftIndex !== null" @click="cancelEditDraftSlot()"
+                                class="text-[11px] px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
+                            Отмена
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Smart Duration Presets -->
@@ -196,10 +206,10 @@
                             class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-xs text-indigo-300 font-semibold transition">
                         14 дн. (основной)
                     </button>
-                    <button v-if="employee.remaining_days > 0 && employee.remaining_days !== 14"
-                            @click="applyDurationPreset(employee.remaining_days)"
+                    <button v-if="availableDaysForCurrentEdit > 0 && availableDaysForCurrentEdit !== 14"
+                            @click="applyDurationPreset(availableDaysForCurrentEdit)"
                             class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-emerald-600/30 border border-slate-700 text-xs text-emerald-300 font-semibold transition">
-                        Весь остаток ({{ employee.remaining_days }} дн.)
+                        Весь остаток ({{ availableDaysForCurrentEdit }} дн.)
                     </button>
                     <button @click="applyDurationPreset(7)"
                             class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-xs text-slate-300 font-medium transition">
@@ -228,11 +238,18 @@
                     </span>
                 </div>
 
-                <button @click="addPeriodToDraft()" :disabled="submitting || !formStart || !formEnd"
-                        class="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow transition flex items-center justify-center gap-1.5">
-                    <i data-lucide="plus-circle" class="w-4 h-4"></i>
-                    <span>Добавить период в черновик</span>
-                </button>
+                <div class="flex items-center gap-2">
+                    <button @click="savePeriodToDraft()" :disabled="submitting || !formStart || !formEnd"
+                            class="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow transition flex items-center justify-center gap-1.5">
+                        <i :data-lucide="editingDraftIndex !== null ? 'check' : 'plus-circle'" class="w-4 h-4"></i>
+                        <span v-if="editingDraftIndex !== null">💾 Сохранить новые даты</span>
+                        <span v-else>Добавить период в черновик</span>
+                    </button>
+                    <button v-if="editingDraftIndex !== null" @click="cancelEditDraftSlot()"
+                            class="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition">
+                        Отмена
+                    </button>
+                </div>
 
                 <!-- Top-3 Alternatives offered by CSP Solver on conflict -->
                 <div v-if="alternatives.length > 0" class="pt-3 border-t border-slate-800 space-y-2">
@@ -254,26 +271,44 @@
             <!-- Current Draft Card -->
             <div v-if="draftSlots.length > 0" class="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 space-y-3">
                 <div class="flex items-center justify-between">
-                    <h3 class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                        <i data-lucide="file-edit" class="w-4 h-4"></i>
-                        <span>Черновик ({{ employee.draft_days }} дн.)</span>
-                    </h3>
-                    <button @click="clearDraft()" class="text-[11px] text-rose-400 hover:text-rose-300">Сбросить</button>
+                    <div>
+                        <h3 class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                            <i data-lucide="file-edit" class="w-4 h-4"></i>
+                            <span>Черновик перед отправкой ({{ employee.draft_days }} дн.)</span>
+                        </h3>
+                        <p class="text-[11px] text-slate-400 mt-0.5">
+                            ✏️ Вы можете изменить даты любого периода до отправки руководителю
+                        </p>
+                    </div>
+                    <button @click="clearDraft()" class="text-[11px] text-rose-400 hover:text-rose-300 shrink-0">Сбросить всё</button>
                 </div>
 
                 <div class="space-y-2">
                     <div v-for="(ds, idx) in draftSlots" :key="idx"
-                         class="p-2.5 rounded-xl bg-slate-800/90 border border-slate-700 flex items-center justify-between">
-                        <div>
-                            <div class="text-xs font-bold text-white">{{ formatDateRu(ds.start) }} – {{ formatDateRu(ds.end) }}</div>
+                         class="p-2.5 rounded-xl border flex items-center justify-between gap-2 transition"
+                         :class="editingDraftIndex === idx ? 'bg-indigo-950/50 border-indigo-500' : 'bg-slate-800/90 border-slate-700'">
+                        <div class="min-w-0">
+                            <div class="text-xs font-bold text-white flex items-center gap-1.5 flex-wrap">
+                                <span>{{ formatDateRu(ds.start) }} – {{ formatDateRu(ds.end) }}</span>
+                                <span v-if="editingDraftIndex === idx" class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/30 text-indigo-300">Редактируется</span>
+                            </div>
                             <div class="text-[11px] text-slate-400">
                                 {{ ds.days }} календ. дн.
                                 <span v-if="ds.days >= 14" class="text-emerald-400 font-medium">• Основной блок (≥14 дн.)</span>
                             </div>
                         </div>
-                        <button @click="removeDraftSlot(idx)" class="p-1.5 text-rose-400 hover:bg-rose-500/20 rounded-lg transition" title="Удалить период">
-                            ✕
-                        </button>
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            <button @click="startEditDraftSlot(idx, ds)"
+                                    class="px-2.5 py-1.5 rounded-lg bg-indigo-600/25 hover:bg-indigo-600/40 border border-indigo-500/40 text-indigo-200 text-[11px] font-semibold transition flex items-center gap-1"
+                                    title="Изменить даты этого периода">
+                                <span>✏️ Изменить</span>
+                            </button>
+                            <button @click="removeDraftSlot(idx)"
+                                    class="p-1.5 text-rose-400 hover:bg-rose-500/20 rounded-lg transition text-xs"
+                                    title="Удалить период">
+                                ✕
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -290,14 +325,26 @@
 
             <!-- My Submitted / Approved Vacation Slots -->
             <div v-if="mySlots.length > 0" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2.5">
-                <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
-                    <i data-lucide="calendar-check" class="w-4 h-4 text-emerald-400"></i>
-                    <span>Мои отправленные периоды ({{ selectedYear }})</span>
-                </h3>
+                <div class="flex items-center justify-between gap-2">
+                    <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
+                        <i data-lucide="calendar-check" class="w-4 h-4 text-emerald-400"></i>
+                        <span>Мои отправленные периоды ({{ selectedYear }})</span>
+                    </h3>
+                    <button v-if="hasEditableSubmittedSlots"
+                            @click="recallSubmittedSlots()"
+                            :disabled="submitting"
+                            class="px-2.5 py-1 rounded-lg bg-indigo-600/25 hover:bg-indigo-600/40 border border-indigo-500/40 text-indigo-200 text-[11px] font-semibold transition flex items-center gap-1 shrink-0">
+                        <span>✏️ Изменить даты</span>
+                    </button>
+                </div>
+
+                <p v-if="hasEditableSubmittedSlots" class="text-[11px] text-slate-400">
+                    Пока руководитель ещё не утвердил заявку, вы можете нажать <b>«✏️ Изменить даты»</b> и скорректировать периоды.
+                </p>
 
                 <div class="space-y-2">
                     <div v-for="sl in mySlots" :key="sl.id"
-                         class="p-3 rounded-xl bg-slate-800/80 border border-slate-700/80 flex items-center justify-between">
+                         class="p-3 rounded-xl bg-slate-800/80 border border-slate-700/80 flex items-center justify-between gap-2">
                         <div>
                             <div class="text-xs font-bold text-white">{{ formatDateRu(sl.start_date) }} – {{ formatDateRu(sl.end_date) }}</div>
                             <div class="text-[11px] text-slate-400">
@@ -305,7 +352,7 @@
                                 <span v-if="sl.is_primary_block" class="text-indigo-400">• Основной блок</span>
                             </div>
                         </div>
-                        <span class="px-2.5 py-1 rounded-full text-[11px] font-bold"
+                        <span class="px-2.5 py-1 rounded-full text-[11px] font-bold shrink-0"
                               :class="statusBadgeClass(sl.status)">
                             {{ statusLabelRu(sl.status) }}
                         </span>
