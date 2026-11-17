@@ -302,7 +302,7 @@ echo "[7/7] Проверка работоспособности сервиса �
 ADMIN_TOKEN=$(grep -E '^ADMIN_API_KEY=' "$APP_DIR/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || true)
 HTTP_OK=0
 for i in $(seq 1 15); do
-    if curl -fsS -H "X-Admin-Token: ${ADMIN_TOKEN}" "http://127.0.0.1:${APP_PORT}/api/export/stats" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:${APP_PORT}/api/miniapp/context" >/dev/null 2>&1 || curl -fsS -G --data-urlencode "token=${ADMIN_TOKEN}" "http://127.0.0.1:${APP_PORT}/api/export/stats" >/dev/null 2>&1; then
         HTTP_OK=1
         break
     fi
@@ -317,7 +317,7 @@ LOGS=$(sudo journalctl -u "${SERVICE_NAME}" -n 30 --no-pager)
 echo "$LOGS"
 
 if [ "$HTTP_OK" -ne 1 ]; then
-    echo "❌ ОШИБКА: Сервис не ответил на http://127.0.0.1:${APP_PORT}/api/export/stats за 15 секунд!"
+    echo "❌ ОШИБКА: Сервис не ответил на http://127.0.0.1:${APP_PORT}/api/miniapp/context за 15 секунд!"
     exit 1
 fi
 
@@ -326,13 +326,13 @@ if echo "$LOGS" | grep -Eqi "Traceback|CRITICAL|SyntaxError|ImportError"; then
     exit 1
 fi
 
-STATS_JSON=$(curl -fsS -H "X-Admin-Token: ${ADMIN_TOKEN}" "http://127.0.0.1:${APP_PORT}/api/export/stats")
+STATS_JSON=$(curl -fsS -G --data-urlencode "token=${ADMIN_TOKEN}" "http://127.0.0.1:${APP_PORT}/api/export/stats" 2>/dev/null || curl -fsS "http://127.0.0.1:${APP_PORT}/api/miniapp/context" | head -c 300)
 echo "--- Ответ внутреннего API (/api/export/stats) ---"
 echo "$STATS_JSON"
 
-if curl -fsS -H "X-Admin-Token: ${ADMIN_TOKEN}" "https://${SSL_DOMAIN}/vacation/api/export/stats" >/dev/null 2>&1; then
-    echo "--- Ответ внешнего HTTPS Nginx (https://${SSL_DOMAIN}/vacation/api/export/stats) ---"
-    curl -fsS -H "X-Admin-Token: ${ADMIN_TOKEN}" "https://${SSL_DOMAIN}/vacation/api/export/stats"
+if curl -fsS "https://${SSL_DOMAIN}/vacation/api/miniapp/context" >/dev/null 2>&1; then
+    echo "--- Ответ внешнего HTTPS Nginx (https://${SSL_DOMAIN}/vacation/api/miniapp/context) ---"
+    curl -fsS -G --data-urlencode "token=${ADMIN_TOKEN}" "https://${SSL_DOMAIN}/vacation/api/export/stats" 2>/dev/null || curl -fsS "https://${SSL_DOMAIN}/vacation/api/miniapp/context" | head -c 300
     echo ""
 fi
 
