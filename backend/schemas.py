@@ -86,6 +86,7 @@ class IncompatibleGroupCreate(BaseModel):
     name: str
     employee_ids: List[int]
     max_concurrent: int = 1
+    min_gap_days: int = Field(default=0, ge=0, le=60)
     reason: Optional[str] = "Взаимозаменяемые сотрудники"
 
 
@@ -95,7 +96,18 @@ class IncompatibleGroupOut(BaseModel):
     employee_ids: List[int]
     employee_names: List[str] = []
     max_concurrent: int = 1
+    min_gap_days: int = 0
     reason: Optional[str] = None
+
+
+class VacationLimitsConfig(BaseModel):
+    max_single_slot_days: int = Field(default=21, ge=1, le=120)
+    max_summer_days: int = Field(default=21, ge=1, le=120)
+    summer_start_month: int = Field(default=6, ge=1, le=12)
+    summer_end_month: int = Field(default=9, ge=1, le=12)
+    min_total_year_days: int = Field(default=14, ge=1, le=120)
+    allow_flexible_total: bool = True
+    is_active: bool = True
 
 
 # --- Personal Incompatible Pair Schemas ---

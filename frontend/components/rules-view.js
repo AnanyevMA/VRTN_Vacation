@@ -17,6 +17,7 @@ window.RulesView = {
                 name: '',
                 employee_ids: [],
                 max_concurrent: 1,
+                min_gap_days: 0,
                 reason: '',
             },
             newPair: {
@@ -79,6 +80,7 @@ window.RulesView = {
                 name: '',
                 employee_ids: [],
                 max_concurrent: 1,
+                min_gap_days: 0,
                 reason: '',
             };
             this.empSearch = '';
@@ -221,7 +223,10 @@ window.RulesView = {
                                     <div class="font-bold text-rose-300 text-sm">{{ g.name }}</div>
                                     <div class="text-slate-400 text-[11px] italic">{{ g.reason || 'Запрет одновременного отпуска' }}</div>
                                 </div>
-                                <div class="flex items-center gap-2">
+                                <div class="flex items-center gap-2 flex-wrap justify-end">
+                                    <span v-if="g.min_gap_days && g.min_gap_days > 0" class="text-[10px] bg-amber-950/70 text-amber-300 px-2 py-0.5 rounded border border-amber-700/60 font-semibold">
+                                        ⏱ Перерыв: {{ g.min_gap_days }} дн.
+                                    </span>
                                     <span class="text-[10px] bg-rose-950/60 text-rose-300 px-2 py-0.5 rounded border border-rose-800/50">
                                         Макс. одновременно: {{ g.max_concurrent }} чел.
                                     </span>
@@ -277,15 +282,20 @@ window.RulesView = {
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
-                            <label class="text-[11px] text-slate-400">Лимит одновременных отпусков:</label>
+                            <label class="text-[11px] text-slate-400">Макс. одновременно:</label>
                             <input v-model.number="newGroup.max_concurrent" type="number" min="1" max="5" class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 text-xs"/>
-                            <span class="text-[10px] text-slate-500">1 = абсолютный запрет любого пересечения</span>
+                            <span class="text-[10px] text-slate-500">1 = запрет пересечения</span>
                         </div>
                         <div>
-                            <label class="text-[11px] text-slate-400">Причина запрета:</label>
-                            <input v-model="newGroup.reason" placeholder="Напр., Взаимозаменяемые на ключевом участке" class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 text-xs"/>
+                            <label class="text-[11px] text-slate-400">Перерыв между ними (дн.):</label>
+                            <input v-model.number="newGroup.min_gap_days" type="number" min="0" max="60" class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 text-xs"/>
+                            <span class="text-[10px] text-slate-500">7 = перерыв 1 неделя</span>
+                        </div>
+                        <div>
+                            <label class="text-[11px] text-slate-400">Причина / участок:</label>
+                            <input v-model="newGroup.reason" placeholder="Напр., Делают пуговицы / Смена" class="w-full bg-slate-800 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 text-xs"/>
                         </div>
                     </div>
 
@@ -445,24 +455,32 @@ window.RulesView = {
         <div class="bg-slate-800/90 p-5 rounded-2xl border border-slate-700/70 shadow space-y-4">
             <h3 class="font-bold text-white text-base flex items-center gap-2 border-b border-slate-700 pb-3">
                 <i data-lucide="scale" class="w-5 h-5 text-emerald-400"></i>
-                Нормативы ТК РФ и параметры оптимизатора швейного производства
+                Нормативы ТК РФ, лимиты длительности и сезонности отпусков (VRTN workshop)
             </h3>
 
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
                 <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 space-y-1">
                     <div class="font-bold text-slate-200 flex items-center justify-between">
-                        <span>Неделимый блок &ge; 14 дней</span>
+                        <span>Не более 21 дня подряд</span>
                         <span class="text-emerald-400 font-semibold">HARD</span>
                     </div>
-                    <p class="text-slate-400">Статья 125 ТК РФ. Минимум одна непрерывная часть отпуска за рабочий год должна быть от 14 календарных дней.</p>
+                    <p class="text-slate-400">Максимальная длительность одного непрерывного периода отпуска — не более 21 календарного дня (3 недель).</p>
                 </div>
 
                 <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 space-y-1">
                     <div class="font-bold text-slate-200 flex items-center justify-between">
-                        <span>Региональная норма (36 дней)</span>
+                        <span>Июнь–Сентябрь &le; 21 дня</span>
+                        <span class="text-amber-400 font-semibold">HARD</span>
+                    </div>
+                    <p class="text-slate-400">Не более трёх недель (21 календарного дня) суммарно в летне-осенний сезон с 1 июня по 30 сентября.</p>
+                </div>
+
+                <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                    <div class="font-bold text-slate-200 flex items-center justify-between">
+                        <span>Не менее 2 недель в год</span>
                         <span class="text-emerald-400 font-semibold">HARD</span>
                     </div>
-                    <p class="text-slate-400">28 основных + 8 дополнительных календарных дней для предприятий Республики Хакасия.</p>
+                    <p class="text-slate-400">Минимум 14 календарных дней отпуска в год (ст. 125 ТК РФ — неделимый блок &ge; 14 дн., норма региона — до 36 дней).</p>
                 </div>
 
                 <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 space-y-1">
@@ -470,7 +488,7 @@ window.RulesView = {
                         <span>Мягкие веса (Soft Criteria)</span>
                         <span class="text-indigo-400 font-semibold">SOFT</span>
                     </div>
-                    <p class="text-slate-400">Приоритет по трудовому стажу (швеи и мастера с большим опытом) и штраф за дробление отпуска на отрезки менее 7 дней.</p>
+                    <p class="text-slate-400">Приоритет по трудовому стажу и штраф за дробление отпуска на микро-отрезки менее 7 дней.</p>
                 </div>
             </div>
         </div>

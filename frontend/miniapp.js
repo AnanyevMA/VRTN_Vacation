@@ -215,7 +215,13 @@ createApp({
 
         const isReadyToSubmitDraft = computed(() => {
             if (!employee.value || draftSlots.value.length === 0) return false;
-            return employee.value.remaining_days === 0 && employee.value.has_14_day_block;
+            if (!employee.value.has_14_day_block) return false;
+            if (employee.value.allow_flexible_total) {
+                const totalPlanned = (employee.value.scheduled_days || 0) + (employee.value.draft_days || 0);
+                const minYear = employee.value.min_total_year_days || 14;
+                return totalPlanned >= minYear && totalPlanned <= (employee.value.total_vacation_days || 36);
+            }
+            return employee.value.remaining_days === 0;
         });
 
         const hasEditableSubmittedSlots = computed(() => {

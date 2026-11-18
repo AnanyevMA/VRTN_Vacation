@@ -136,12 +136,23 @@
                     <div class="bg-amber-400 h-full transition-all" :style="{ width: Math.min(100, (employee.draft_days / employee.total_vacation_days) * 100) + '%' }"></div>
                 </div>
 
-                <!-- Simple 14-day TK RF badge -->
-                <div class="flex items-center gap-2 text-xs pt-1"
-                     :class="employee.has_14_day_block ? 'text-emerald-400' : 'text-amber-300'">
-                    <i :data-lucide="employee.has_14_day_block ? 'check-circle-2' : 'info'" class="w-4 h-4 shrink-0"></i>
-                    <span v-if="employee.has_14_day_block">Основной блок ≥ 14 дней выбран ✅</span>
-                    <span v-else>Нужен хотя бы один период от 14 дней подряд (ТК РФ)</span>
+                <!-- Simple 14-day TK RF & Summer Limits badges -->
+                <div class="space-y-1.5 pt-1">
+                    <div class="flex items-center gap-2 text-xs"
+                         :class="employee.has_14_day_block ? 'text-emerald-400' : 'text-amber-300'">
+                        <i :data-lucide="employee.has_14_day_block ? 'check-circle-2' : 'info'" class="w-4 h-4 shrink-0"></i>
+                        <span v-if="employee.has_14_day_block">Минимум 2 недели (≥ 14 дней) выбрано ✅</span>
+                        <span v-else>Не менее 2 недель (14 дней) отпуска в год</span>
+                    </div>
+                    <div class="flex items-center justify-between text-[11px] text-slate-300 bg-slate-800/70 px-2.5 py-1.5 rounded-xl border border-slate-700/70">
+                        <span>☀️ Июнь–Сентябрь (макс. 21 дн.):</span>
+                        <b :class="(employee.summer_days_used || 0) > (employee.max_summer_days || 21) ? 'text-rose-400' : 'text-amber-300'">
+                            {{ employee.summer_days_used || 0 }} / {{ employee.max_summer_days || 21 }} дн.
+                        </b>
+                    </div>
+                    <div class="text-[11px] text-slate-400">
+                        📌 Правила: <b>не более 21 дня подряд</b> в один отпуск • <b>до 21 дня</b> с июня по сентябрь.
+                    </div>
                 </div>
             </div>
 
@@ -152,10 +163,14 @@
                     <span>Нельзя пересекаться по датам с напарницами:</span>
                 </div>
                 <div v-for="r in myRestrictions" :key="r.partner_id" class="text-xs bg-slate-800/70 rounded-xl p-2.5 border border-slate-700/70 space-y-1">
-                    <div class="flex items-center justify-between">
+                    <div class="flex items-center justify-between gap-2">
                         <span class="font-semibold text-white">👤 {{ r.partner_name }}</span>
-                        <span class="text-[10px] text-slate-400">{{ r.partner_role }}</span>
+                        <span v-if="r.min_gap_days && r.min_gap_days > 0" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
+                            ⏱ перерыв {{ r.min_gap_days }} дн.
+                        </span>
+                        <span v-else class="text-[10px] text-slate-400">{{ r.partner_role }}</span>
                     </div>
+                    <div v-if="r.reason" class="text-[10px] text-slate-400 italic">{{ r.reason }}</div>
                     <div v-if="r.slots && r.slots.length > 0" class="text-[11px] text-amber-300">
                         Занято: <span v-for="(s, sIdx) in r.slots" :key="s.id">{{ formatDateRu(s.start_date) }}–{{ formatDateRu(s.end_date) }}<span v-if="sIdx < r.slots.length - 1">, </span></span>
                     </div>
@@ -200,20 +215,25 @@
                     </div>
                 </div>
 
-                <!-- Smart Duration Presets -->
+                <!-- Smart Duration Presets (capped at max 21 days in a single vacation) -->
                 <div class="flex items-center gap-1.5 flex-wrap">
                     <button @click="applyDurationPreset(14)"
                             class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-xs text-indigo-300 font-semibold transition">
-                        14 дн. (основной)
+                        14 дн. (2 нед.)
                     </button>
-                    <button v-if="availableDaysForCurrentEdit > 0 && availableDaysForCurrentEdit !== 14"
+                    <button v-if="availableDaysForCurrentEdit >= 21"
+                            @click="applyDurationPreset(21)"
+                            class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-emerald-600/30 border border-slate-700 text-xs text-emerald-300 font-semibold transition">
+                        21 дн. (макс. 3 нед.)
+                    </button>
+                    <button v-if="availableDaysForCurrentEdit > 0 && availableDaysForCurrentEdit < 21 && availableDaysForCurrentEdit !== 14 && availableDaysForCurrentEdit !== 7"
                             @click="applyDurationPreset(availableDaysForCurrentEdit)"
                             class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-emerald-600/30 border border-slate-700 text-xs text-emerald-300 font-semibold transition">
-                        Весь остаток ({{ availableDaysForCurrentEdit }} дн.)
+                        Остаток ({{ availableDaysForCurrentEdit }} дн.)
                     </button>
                     <button @click="applyDurationPreset(7)"
                             class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-xs text-slate-300 font-medium transition">
-                        7 дн.
+                        7 дн. (1 нед.)
                     </button>
                 </div>
 
@@ -313,8 +333,8 @@
                 </div>
 
                 <div v-if="!isReadyToSubmitDraft" class="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl p-2.5">
-                    <span v-if="employee.remaining_days > 0">👉 Добавьте ещё <b>{{ employee.remaining_days }} дн.</b> до полной нормы ({{ employee.total_vacation_days }} дн.), чтобы отправить график руководителю.</span>
-                    <span v-else-if="!employee.has_14_day_block">⚠️ Хотя бы одна часть отпуска должна быть не менее 14 дней подряд.</span>
+                    <span v-if="!employee.has_14_day_block">⚠️ Необходимо выбрать минимум 2 недели (хотя бы одна часть отпуска ≥ 14 дней подряд).</span>
+                    <span v-else-if="employee.remaining_days > 0">👉 Добавьте ещё <b>{{ employee.remaining_days }} дн.</b> до полной нормы ({{ employee.total_vacation_days }} дн.), чтобы отправить график руководителю.</span>
                 </div>
 
                 <button v-else @click="submitDraft()" :disabled="submitting"

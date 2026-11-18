@@ -128,7 +128,7 @@
 
 ### Таблица `schedule_rules` (Матрица правил планирования — `L105–L114`)
 * `id`: Integer, PK
-* `rule_key`: String(50), Unique, Not Null (`tk_rf_min_block`, `max_concurrent_roles`, `max_concurrent_shifts`, `incompatible_employee_groups`, `personal_incompatible_pairs`, `blackout_periods`)
+* `rule_key`: String(50), Unique, Not Null (`tk_rf_min_block`, `vacation_limits`, `max_concurrent_roles`, `max_concurrent_shifts`, `incompatible_employee_groups`, `personal_incompatible_pairs`, `blackout_periods`)
 * `rule_type`: String(20), Not Null (`HARD` | `SOFT`)
 * `parameters`: JSON, Not Null
 * `description`: Text, Nullable
@@ -156,7 +156,7 @@
 
 ---
 
-## 3. Полная карта REST API эндпоинтов (46 маршрутов)
+## 3. Полная карта REST API эндпоинтов (48 маршрутов)
 
 Эндпоинты с пометкой 🔒 требуют `Depends(require_admin)` (заголовок `X-Admin-Token` или `?token=` при установленном `ADMIN_API_KEY`).
 
@@ -200,6 +200,8 @@
 | `GET` | `/api/rules/incompatible-pairs` | 🔒 Admin | `rule_routes.py` | Список персональных запретов пересечения 1-на-1 |
 | `POST` | `/api/rules/incompatible-pairs` | 🔒 Admin | `rule_routes.py` | Создание персонального запрета пересечения 1-на-1 |
 | `DELETE` | `/api/rules/incompatible-pairs/{pair_id}` | 🔒 Admin | `rule_routes.py` | Удаление персонального запрета пересечения 1-на-1 |
+| `GET` | `/api/rules/vacation-limits` | 🔒 Admin | `rule_routes.py` | Получение лимитов длительности и сезонности (`21 дн. подряд`, `21 дн. с июня по сентябрь`, `мин. 14 дн. в год`) |
+| `PUT` | `/api/rules/vacation-limits` | 🔒 Admin | `rule_routes.py` | Обновление лимитов длительности и сезонности отпусков |
 | `GET` | `/api/bot-admins` | Публ. | `admin_routes.py` | Список администраторов бота MAX |
 | `POST` | `/api/bot-admins` | 🔒 Admin | `admin_routes.py` | Добавление администратора бота |
 | `PUT` | `/api/bot-admins/{admin_id}` | 🔒 Admin | `admin_routes.py` | Обновление администратора бота |

@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
-from backend.models import Employee, VacationSlot, ChatMessage, EmployeeDraft
+from backend.models import Employee, VacationSlot, ChatMessage, EmployeeDraft, ScheduleRule
 from backend.solver.nlp_date_parser import (
     parse_russian_vacation_text,
     calculate_slot_days,
@@ -253,26 +253,51 @@ class IntakeAgent:
             )
             return self._reply(employee.id, response_text, {"action": "DRAFT_RESET", "draft_slots": []})
 
-        # Check for Confirmation Intent when awaiting confirmation
-        if draft.status == "AWAITING_CONFIRMATION" and (check_confirmation_intent(message_text) or message_text.strip().upper() == "CONFIRM"):
-            slots_to_commit = draft.slots or []
-            self.solver_agent.commit_approved_slots(employee.id, slots_to_commit, status="REQUESTED")
-            draft.status = "COMMITTED"
-            self.db.commit()
+        # Check for Confirmation Intent when awaiting confirmation (or when flexible min_total_year_days is reached)
+        if check_confirmation_intent(message_text) or message_text.strip().upper() == "CONFIRM":
+            slots_to_commit = draft.slots or [] if draft.status != "COMMITTED" else []
+            if slots_to_commit:
+                target_yr = draft.target_year or 2026
+                approved_yr_slots = (
+                    self.db.query(VacationSlot)
+                    .filter(
+                        VacationSlot.employee_id == employee.id,
+                        VacationSlot.status == "APPROVED",
+                        VacationSlot.start_date >= date(target_yr, 1, 1),
+                        VacationSlot.start_date <= date(target_yr, 12, 31),
+                    )
+                    .all()
+                )
+                draft_days_sum = sum(s.get("days", 0) for s in slots_to_commit)
+                total_sum = draft_days_sum + sum(s.days_count for s in approved_yr_slots)
+                has_14_any = any(s.get("days", 0) >= 14 for s in slots_to_commit) or any(s.days_count >= 14 for s in approved_yr_slots)
 
-            lines = []
-            for s in slots_to_commit:
-                st = date.fromisoformat(s["start"])
-                en = date.fromisoformat(s["end"])
-                lines.append(f"• **{st.strftime('%d.%m.%Y')} – {en.strftime('%d.%m.%Y')}** ({s['days']} дн.)")
+                limits_rule = self.db.query(ScheduleRule).filter(ScheduleRule.rule_key == "vacation_limits", ScheduleRule.is_active == True).first()
+                allow_flex = bool(limits_rule and isinstance(limits_rule.parameters, dict) and limits_rule.parameters.get("allow_flexible_total"))
+                min_year_days = int(limits_rule.parameters.get("min_total_year_days", 14)) if (limits_rule and isinstance(limits_rule.parameters, dict)) else expected_days
 
-            response_text = (
-                f"🎉 **Заявка официально отправлена руководителю!**\n\n"
-                f"{first_name}, ваш график зафиксирован:\n\n"
-                + "\n".join(lines)
-                + f"\n\nВсего: **{expected_days} дн.** Руководитель цеха увидит заявку в панели управления."
-            )
-            return self._reply(employee.id, response_text, {"action": "SUBMISSION_CONFIRMED", "slots": slots_to_commit, "draft_slots": []})
+                can_confirm = (
+                    draft.status == "AWAITING_CONFIRMATION"
+                    or (allow_flex and min_year_days <= total_sum <= expected_days and has_14_any)
+                )
+                if can_confirm:
+                    self.solver_agent.commit_approved_slots(employee.id, slots_to_commit, status="REQUESTED")
+                    draft.status = "COMMITTED"
+                    self.db.commit()
+
+                    lines = []
+                    for s in slots_to_commit:
+                        st = date.fromisoformat(s["start"])
+                        en = date.fromisoformat(s["end"])
+                        lines.append(f"• **{st.strftime('%d.%m.%Y')} – {en.strftime('%d.%m.%Y')}** ({s['days']} дн.)")
+
+                    response_text = (
+                        f"🎉 **Заявка официально отправлена руководителю!**\n\n"
+                        f"{first_name}, ваш график зафиксирован:\n\n"
+                        + "\n".join(lines)
+                        + f"\n\nВсего: **{total_sum} дн.** Руководитель цеха увидит заявку в панели управления."
+                    )
+                    return self._reply(employee.id, response_text, {"action": "SUBMISSION_CONFIRMED", "slots": slots_to_commit, "draft_slots": []})
 
         # Check if user is selecting an alternative option (1, 2, 3)
         last_agent_msg = (

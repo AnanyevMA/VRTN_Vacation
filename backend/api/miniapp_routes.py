@@ -150,11 +150,23 @@ def get_miniapp_context(
     ]
     depts_list = [{"id": d.id, "name": d.name, "code": d.code} for d in db.query(Department).all()]
 
-    # Blackout periods
+    # Blackout periods & vacation limits
     blackouts = []
     b_rule = db.query(ScheduleRule).filter(ScheduleRule.rule_key == "blackout_periods", ScheduleRule.is_active == True).first()
     if b_rule and isinstance(b_rule.parameters, dict):
         blackouts = b_rule.parameters.get("periods", [])
+
+    limits_rule = db.query(ScheduleRule).filter(ScheduleRule.rule_key == "vacation_limits", ScheduleRule.is_active == True).first()
+    limits_params = limits_rule.parameters if (limits_rule and isinstance(limits_rule.parameters, dict)) else {}
+    vacation_limits = {
+        "is_active": bool(limits_rule),
+        "max_single_slot_days": int(limits_params.get("max_single_slot_days", 21)),
+        "max_summer_days": int(limits_params.get("max_summer_days", 21)),
+        "summer_start_month": int(limits_params.get("summer_start_month", 6)),
+        "summer_end_month": int(limits_params.get("summer_end_month", 9)),
+        "min_total_year_days": int(limits_params.get("min_total_year_days", 14)),
+        "allow_flexible_total": bool(limits_params.get("allow_flexible_total", True)) if limits_rule else False,
+    }
 
     # Company-wide vacation schedule for the selected year (without PII phones)
     all_employees = db.query(Employee).filter(Employee.is_active == True).order_by(Employee.department_id, Employee.full_name).all()
@@ -243,6 +255,7 @@ def get_miniapp_context(
             seen_pids = {r["partner_id"] for r in my_restrictions}
             for g in group_rule.parameters.get("groups", []):
                 eids = g.get("employee_ids", [])
+                g_gap = int(g.get("min_gap_days", 0) or 0)
                 if employee.id in eids:
                     for pid in eids:
                         if pid != employee.id and pid not in seen_pids and pid in emp_by_id:
@@ -252,7 +265,8 @@ def get_miniapp_context(
                                 "partner_id": partner.id,
                                 "partner_name": partner.full_name,
                                 "partner_role": partner.role,
-                                "reason": g.get("name") or "Группа непересечения",
+                                "min_gap_days": g_gap,
+                                "reason": g.get("reason") or g.get("name") or "Группа непересечения",
                                 "slots": slots_by_emp.get(partner.id, []),
                             })
 
@@ -260,6 +274,20 @@ def get_miniapp_context(
         draft_days = sum(d["days"] for d in draft_slots)
         total_days = employee.total_vacation_days or 36
         has_14_block = any(s["days_count"] >= 14 for s in my_slots) or any(d["days"] >= 14 for d in draft_slots)
+
+        # Count summer days (June-September) across my_slots + draft_slots
+        s_m = vacation_limits["summer_start_month"]
+        e_m = vacation_limits["summer_end_month"]
+        summer_days_used = 0
+        for sl in my_slots:
+            summer_days_used += VacationOptimizer._count_summer_days_in_range(
+                date.fromisoformat(sl["start_date"]), date.fromisoformat(sl["end_date"]), s_m, e_m
+            )
+        for ds in draft_slots:
+            summer_days_used += VacationOptimizer._count_summer_days_in_range(
+                date.fromisoformat(ds["start"]), date.fromisoformat(ds["end"]), s_m, e_m
+            )
+
         role_lower = (employee.role or "").lower()
         is_shift_lead = any(k in role_lower for k in ("мастер", "технолог", "руковод", "начальник", "старш"))
 
@@ -275,6 +303,11 @@ def get_miniapp_context(
             "scheduled_days": scheduled_days,
             "draft_days": draft_days,
             "remaining_days": max(0, total_days - scheduled_days - draft_days),
+            "summer_days_used": summer_days_used,
+            "max_summer_days": vacation_limits["max_summer_days"],
+            "max_single_slot_days": vacation_limits["max_single_slot_days"],
+            "min_total_year_days": vacation_limits["min_total_year_days"],
+            "allow_flexible_total": vacation_limits["allow_flexible_total"],
             "has_14_day_block": has_14_block,
             "consent_152fz": bool(getattr(employee, "consent_152fz", False)),
             "bot_access": getattr(employee, "bot_access", "APPROVED") or "APPROVED",
@@ -344,6 +377,7 @@ def get_miniapp_context(
         "my_slots": my_slots,
         "draft_slots": draft_slots,
         "my_restrictions": my_restrictions,
+        "vacation_limits": vacation_limits,
         "blackouts": blackouts,
         "departments": depts_list,
         "shifts": shifts_list,
@@ -376,6 +410,35 @@ def add_miniapp_draft_slot(data: MiniAppAddSlotIn, db: Session = Depends(get_db)
 
     # Immediate single-slot CSP pre-check so employee sees conflicts right away
     optimizer = VacationOptimizer(db)
+    draft_obj = db.query(EmployeeDraft).filter(EmployeeDraft.employee_id == emp.id).first()
+    other_emp_slots: List[Dict[str, date]] = []
+    if draft_obj and draft_obj.status not in ("COMMITTED", "AWAITING_CONFIRMATION") and isinstance(draft_obj.slots, list):
+        for ds in draft_obj.slots:
+            try:
+                s_d = date.fromisoformat(ds["start"])
+                e_d = date.fromisoformat(ds["end"])
+                if s_d.year == data.start_date.year:
+                    other_emp_slots.append({"start": s_d, "end": e_d})
+            except Exception:
+                continue
+    for ap_sl in (
+        db.query(VacationSlot)
+        .filter(
+            VacationSlot.employee_id == emp.id,
+            VacationSlot.status == "APPROVED",
+            VacationSlot.start_date >= date(data.start_date.year, 1, 1),
+            VacationSlot.start_date <= date(data.start_date.year, 12, 31),
+        )
+        .all()
+    ):
+        other_emp_slots.append({"start": ap_sl.start_date, "end": ap_sl.end_date})
+
+    limit_violation = optimizer.check_single_slot_limits_violation(
+        emp, data.start_date, data.end_date, other_employee_slots=other_emp_slots
+    )
+    if limit_violation:
+        raise HTTPException(status_code=400, detail=limit_violation)
+
     conflict_reason = optimizer._get_first_conflict_reason(emp, data.start_date, data.end_date)
     if conflict_reason:
         dur = calculate_slot_days(data.start_date, data.end_date)
@@ -555,8 +618,22 @@ def update_miniapp_draft_slot(data: MiniAppUpdateDraftSlotIn, db: Session = Depe
                 detail=f"Новые даты накладываются на другой период в вашем черновике ({s_st.strftime('%d.%m.%Y')}–{s_en.strftime('%d.%m.%Y')})",
             )
 
-    # 2. Check CSP solver rules (blackouts, role/shift quotas, personal incompatible pairs)
+    # 2. Check CSP solver rules (blackouts, role/shift quotas, personal incompatible pairs, summer & 21-day limits)
     optimizer = VacationOptimizer(db)
+    other_emp_slots: List[Dict[str, date]] = [
+        {"start": ap.start_date, "end": ap.end_date} for ap in approved_slots
+    ]
+    for idx, s in enumerate(draft.slots):
+        if idx == data.index:
+            continue
+        other_emp_slots.append({"start": date.fromisoformat(s["start"]), "end": date.fromisoformat(s["end"])})
+
+    limit_violation = optimizer.check_single_slot_limits_violation(
+        emp, data.start_date, data.end_date, other_employee_slots=other_emp_slots
+    )
+    if limit_violation:
+        raise HTTPException(status_code=400, detail=limit_violation)
+
     conflict_reason = optimizer._get_first_conflict_reason(emp, data.start_date, data.end_date)
     if conflict_reason:
         dur = calculate_slot_days(data.start_date, data.end_date)

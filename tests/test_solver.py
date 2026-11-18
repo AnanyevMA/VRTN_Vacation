@@ -589,5 +589,119 @@ def test_miniapp_edit_draft_and_recall_submitted_slots(test_db):
     assert sum(s.days_count for s in emp_partial_slots) == 36
 
 
+def test_factory_21_day_summer_and_gap_rules(test_db):
+    from fastapi import HTTPException
+    from backend.api.miniapp_routes import (
+        add_miniapp_draft_slot,
+        submit_miniapp_draft,
+        MiniAppAddSlotIn,
+        MiniAppSubmitDraftIn,
+    )
+
+    dept = test_db.query(Department).first()
+    p1 = Employee(
+        phone="+79821112233",
+        max_user_id="uid_poleshchuk",
+        full_name="Полещук",
+        role="Швея (портной)",
+        shift="Смена 1",
+        department_id=dept.id,
+        total_vacation_days=36,
+        consent_152fz=True,
+    )
+    p2 = Employee(
+        phone="+79822223344",
+        max_user_id="uid_artamonova",
+        full_name="Артамонова",
+        role="Швея (портной)",
+        shift="Смена 1",
+        department_id=dept.id,
+        total_vacation_days=36,
+        consent_152fz=True,
+    )
+    test_db.add_all([p1, p2])
+    test_db.commit()
+
+    # Enable vacation_limits rule: max 21 single, max 21 summer (June-Sept), min 14 total/year (flexible)
+    limits_rule = ScheduleRule(
+        rule_key="vacation_limits",
+        rule_type="HARD",
+        parameters={
+            "max_single_slot_days": 21,
+            "max_summer_days": 21,
+            "summer_start_month": 6,
+            "summer_end_month": 9,
+            "min_total_year_days": 14,
+            "allow_flexible_total": True,
+        },
+        is_active=True,
+    )
+    test_db.add(limits_rule)
+
+    # Group with min_gap_days = 7 (1 week mandatory break between vacations)
+    gap_group_rule = test_db.query(ScheduleRule).filter(ScheduleRule.rule_key == "incompatible_employee_groups").first()
+    group_entry = {
+        "id": "grp_gap7",
+        "name": "Полещук, Артамонова, Белянкина",
+        "employee_ids": [p1.id, p2.id],
+        "max_concurrent": 1,
+        "min_gap_days": 7,
+        "reason": "Между отпусками должен быть перерыв 1 неделя",
+    }
+    if not gap_group_rule:
+        gap_group_rule = ScheduleRule(
+            rule_key="incompatible_employee_groups",
+            rule_type="HARD",
+            parameters={"groups": [group_entry]},
+            is_active=True,
+        )
+        test_db.add(gap_group_rule)
+    else:
+        gap_group_rule.parameters = {"groups": [group_entry]}
+    test_db.commit()
+
+    # 1. Poleshchuk takes 14 days in July: 01.07.2026 - 14.07.2026 and submits immediately (flexible total >= 14 days!)
+    add_miniapp_draft_slot(
+        MiniAppAddSlotIn(max_user_id="uid_poleshchuk", start_date=date(2026, 7, 1), end_date=date(2026, 7, 14)),
+        db=test_db,
+    )
+    res_sub_p1 = submit_miniapp_draft(MiniAppSubmitDraftIn(max_user_id="uid_poleshchuk"), db=test_db)
+    assert res_sub_p1["payload"]["action"] == "SUBMISSION_CONFIRMED"
+
+    # 2. Artamonova tries to take 22 days in a single vacation -> rejected (> 21 days in one vacation)
+    with pytest.raises(HTTPException) as exc_22:
+        add_miniapp_draft_slot(
+            MiniAppAddSlotIn(max_user_id="uid_artamonova", start_date=date(2026, 10, 1), end_date=date(2026, 10, 22)),
+            db=test_db,
+        )
+    assert exc_22.value.status_code == 400
+    assert "21" in exc_22.value.detail
+
+    # 3. Artamonova tries to start vacation on 18.07.2026 (only 3 days after Poleshchuk's 14.07 end, needs 7 days gap!)
+    res_gap = add_miniapp_draft_slot(
+        MiniAppAddSlotIn(max_user_id="uid_artamonova", start_date=date(2026, 7, 18), end_date=date(2026, 7, 31)),
+        db=test_db,
+    )
+    assert res_gap["payload"]["action"] == "OFFER_ALTERNATIVES"
+    assert "перерыв минимум 7 дн." in res_gap["text"]
+
+    # 4. Artamonova starts on 22.07.2026 (7 full days gap: 15,16,17,18,19,20,21 July) for 14 days -> succeeds!
+    res_ok = add_miniapp_draft_slot(
+        MiniAppAddSlotIn(max_user_id="uid_artamonova", start_date=date(2026, 7, 22), end_date=date(2026, 8, 4)),
+        db=test_db,
+    )
+    assert res_ok["payload"]["action"] == "DRAFT_UPDATED"
+
+    # 5. Artamonova tries to add another 10 days in September (14 + 10 = 24 summer days > 21 max summer days!) -> rejected
+    with pytest.raises(HTTPException) as exc_summer:
+        add_miniapp_draft_slot(
+            MiniAppAddSlotIn(max_user_id="uid_artamonova", start_date=date(2026, 9, 1), end_date=date(2026, 9, 10)),
+            db=test_db,
+        )
+    assert exc_summer.value.status_code == 400
+    assert "июня по сентябрь" in exc_summer.value.detail
+
+
+
 
 

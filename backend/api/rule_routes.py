@@ -15,6 +15,7 @@ from backend.schemas import (
     IncompatibleGroupOut,
     IncompatiblePairCreate,
     IncompatiblePairOut,
+    VacationLimitsConfig,
 )
 from backend.agents.manager_agent import ManagerAgent
 from backend.auth import require_admin
@@ -117,6 +118,7 @@ def get_incompatible_groups(db: Session = Depends(get_db)):
             employee_ids=g.get("employee_ids", []),
             employee_names=e_names,
             max_concurrent=g.get("max_concurrent", 1),
+            min_gap_days=g.get("min_gap_days", 0) or 0,
             reason=g.get("reason"),
         ))
     return result
@@ -147,6 +149,7 @@ def create_incompatible_group(payload: IncompatibleGroupCreate, db: Session = De
         "name": payload.name,
         "employee_ids": payload.employee_ids,
         "max_concurrent": payload.max_concurrent,
+        "min_gap_days": payload.min_gap_days,
         "reason": payload.reason or "Взаимозаменяемые сотрудники",
     }
     groups.append(new_group)
@@ -161,6 +164,7 @@ def create_incompatible_group(payload: IncompatibleGroupCreate, db: Session = De
         employee_ids=payload.employee_ids,
         employee_names=e_names,
         max_concurrent=payload.max_concurrent,
+        min_gap_days=payload.min_gap_days,
         reason=payload.reason,
     )
 
@@ -270,4 +274,50 @@ def delete_incompatible_pair(pair_id: str, db: Session = Depends(get_db)):
     rule.parameters = {"pairs": pairs}
     db.commit()
     return {"success": True, "message": "Персональный запрет пересечения удален"}
+
+
+@router.get("/vacation-limits", response_model=VacationLimitsConfig)
+def get_vacation_limits(db: Session = Depends(get_db)):
+    """Returns global factory vacation duration & seasonal limits."""
+    rule = db.query(ScheduleRule).filter(ScheduleRule.rule_key == "vacation_limits").first()
+    if not rule or not isinstance(rule.parameters, dict):
+        return VacationLimitsConfig()
+    p = rule.parameters
+    return VacationLimitsConfig(
+        max_single_slot_days=p.get("max_single_slot_days", 21),
+        max_summer_days=p.get("max_summer_days", 21),
+        summer_start_month=p.get("summer_start_month", 6),
+        summer_end_month=p.get("summer_end_month", 9),
+        min_total_year_days=p.get("min_total_year_days", 14),
+        allow_flexible_total=bool(p.get("allow_flexible_total", True)),
+        is_active=bool(rule.is_active),
+    )
+
+
+@router.put("/vacation-limits", response_model=VacationLimitsConfig, dependencies=[Depends(require_admin)])
+def update_vacation_limits(payload: VacationLimitsConfig, db: Session = Depends(get_db)):
+    """Updates global factory vacation duration & seasonal limits."""
+    rule = db.query(ScheduleRule).filter(ScheduleRule.rule_key == "vacation_limits").first()
+    params = {
+        "max_single_slot_days": payload.max_single_slot_days,
+        "max_summer_days": payload.max_summer_days,
+        "summer_start_month": payload.summer_start_month,
+        "summer_end_month": payload.summer_end_month,
+        "min_total_year_days": payload.min_total_year_days,
+        "allow_flexible_total": payload.allow_flexible_total,
+    }
+    if not rule:
+        rule = ScheduleRule(
+            rule_key="vacation_limits",
+            rule_type="HARD",
+            parameters=params,
+            description="Лимиты длительности и сезонности отпусков (макс. 21 день подряд, макс. 21 день с июня по сентябрь, мин. 14 дней в год).",
+            is_active=payload.is_active,
+        )
+        db.add(rule)
+    else:
+        rule.parameters = params
+        rule.is_active = payload.is_active
+    db.commit()
+    return payload
 

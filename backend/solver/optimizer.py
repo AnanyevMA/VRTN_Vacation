@@ -58,27 +58,59 @@ class VacationOptimizer:
                 "suggested_alternatives": [],
             }
 
-        # 1. Check TK RF / Total Days validation
+        # 1. Check TK RF / Total Days & Factory Vacation Limits validation
         total_days = sum(calculate_slot_days(s["start"], s["end"]) for s in requested_slots)
         has_primary_14 = any(calculate_slot_days(s["start"], s["end"]) >= 14 for s in requested_slots)
         expected_days = employee.total_vacation_days or 36
+        limits_cfg = self._get_vacation_limits_config()
 
         violations = []
-        if total_days != expected_days:
-            violations.append(
-                f"Сумма дней отпуска ({total_days} дн.) не соответствует вашей норме ({expected_days} дн. "
-                f"для региона {employee.region})."
-            )
+        if limits_cfg and limits_cfg.get("allow_flexible_total"):
+            min_total = limits_cfg.get("min_total_year_days", 14)
+            if total_days < min_total:
+                violations.append(
+                    f"Суммарный отпуск за год ({total_days} дн.) не может быть менее {min_total} календарных дней (двух недель)."
+                )
+            elif total_days > expected_days:
+                violations.append(
+                    f"Сумма дней отпуска ({total_days} дн.) превышает вашу годовую норму ({expected_days} дн.)."
+                )
+        else:
+            if total_days != expected_days:
+                violations.append(
+                    f"Сумма дней отпуска ({total_days} дн.) не соответствует вашей норме ({expected_days} дн. "
+                    f"для региона {employee.region})."
+                )
 
         if not has_primary_14:
             violations.append(
                 "По ТК РФ (ст. 125) хотя бы одна неделимая часть отпуска должна составлять не менее 14 календарных дней."
             )
 
+        if limits_cfg:
+            max_single = limits_cfg.get("max_single_slot_days", 21)
+            for s in requested_slots:
+                dur = calculate_slot_days(s["start"], s["end"])
+                if dur > max_single:
+                    violations.append(
+                        f"Период {s['start'].strftime('%d.%m.%Y')} – {s['end'].strftime('%d.%m.%Y')} ({dur} дн.) превышает лимит: не более {max_single} дня подряд в один отпуск."
+                    )
+
+            max_summer = limits_cfg.get("max_summer_days", 21)
+            summer_days = self._count_summer_days_for_slots(
+                requested_slots,
+                limits_cfg.get("summer_start_month", 6),
+                limits_cfg.get("summer_end_month", 9),
+            )
+            if summer_days > max_summer:
+                violations.append(
+                    f"С июня по сентябрь можно взять не более {max_summer} дня отпуска (трёх недель). Сейчас выбрано {summer_days} дн."
+                )
+
         if violations:
             return {
                 "status": "INVALID_TK",
-                "message": "Заявка не соответствует требованиям ТК РФ или лимиту дней.",
+                "message": "Заявка не соответствует требованиям ТК РФ или лимитам длительности отпуска.",
                 "total_requested_days": total_days,
                 "has_primary_block_14": has_primary_14,
                 "violations": violations,
@@ -122,9 +154,15 @@ class VacationOptimizer:
                 group_name = incomp_conflict["group_name"]
                 c_names = ", ".join(incomp_conflict["conflicting_names"])
                 reason = incomp_conflict["reason"]
-                conflicts.append(
-                    f"Период {st.strftime('%d.%m.%Y')} – {en.strftime('%d.%m.%Y')} пересекается с отпуском участников группы непересечения «{group_name}» ({c_names}). Причина: «{reason}»"
-                )
+                min_gap = incomp_conflict.get("min_gap_days", 0)
+                if incomp_conflict.get("is_gap_violation") and min_gap > 0:
+                    conflicts.append(
+                        f"Период {st.strftime('%d.%m.%Y')} – {en.strftime('%d.%m.%Y')} нарушает обязательный перерыв {min_gap} дн. между отпусками в группе «{group_name}» ({c_names}). Причина: «{reason}»"
+                    )
+                else:
+                    conflicts.append(
+                        f"Период {st.strftime('%d.%m.%Y')} – {en.strftime('%d.%m.%Y')} пересекается с отпуском участников группы непересечения «{group_name}» ({c_names}). Причина: «{reason}»"
+                    )
 
             # Check Personal Incompatible Pairs
             pair_conflict = self._check_personal_pairs_violation(employee, st, en)
@@ -261,6 +299,60 @@ class VacationOptimizer:
 
         return False
 
+    def _get_vacation_limits_config(self) -> Optional[Dict[str, Any]]:
+        rule = self.rules_by_key.get("vacation_limits")
+        if not rule or not rule.is_active or not isinstance(rule.parameters, dict):
+            return None
+        return rule.parameters
+
+    @staticmethod
+    def _count_summer_days_in_range(start: date, end: date, start_month: int = 6, end_month: int = 9) -> int:
+        if end < start:
+            return 0
+        count = 0
+        cur = start
+        while cur <= end:
+            if start_month <= cur.month <= end_month:
+                count += 1
+            cur += timedelta(days=1)
+        return count
+
+    def _count_summer_days_for_slots(
+        self, slots: List[Dict[str, date]], start_month: int = 6, end_month: int = 9
+    ) -> int:
+        return sum(self._count_summer_days_in_range(s["start"], s["end"], start_month, end_month) for s in slots)
+
+    def check_single_slot_limits_violation(
+        self,
+        employee: Employee,
+        start: date,
+        end: date,
+        other_employee_slots: Optional[List[Dict[str, date]]] = None,
+    ) -> Optional[str]:
+        limits_cfg = self._get_vacation_limits_config()
+        if not limits_cfg:
+            return None
+
+        dur = calculate_slot_days(start, end)
+        max_single = limits_cfg.get("max_single_slot_days", 21)
+        if dur > max_single:
+            return f"Не более {max_single} дня подряд в один отпуск (выбрано {dur} дн.)"
+
+        max_summer = limits_cfg.get("max_summer_days", 21)
+        s_month = limits_cfg.get("summer_start_month", 6)
+        e_month = limits_cfg.get("summer_end_month", 9)
+        this_summer = self._count_summer_days_in_range(start, end, s_month, e_month)
+        if this_summer > 0:
+            existing_summer = 0
+            if other_employee_slots is not None:
+                existing_summer = self._count_summer_days_for_slots(other_employee_slots, s_month, e_month)
+            if this_summer + existing_summer > max_summer:
+                return (
+                    f"С июня по сентябрь можно взять не более {max_summer} дня отпуска (трёх недель). "
+                    f"С этим периодом получится {this_summer + existing_summer} дн."
+                )
+        return None
+
     def _get_incompatible_groups(self, employee_id: int) -> List[Dict[str, Any]]:
         rule = self.rules_by_key.get("incompatible_employee_groups")
         if not rule or not rule.is_active:
@@ -280,13 +372,14 @@ class VacationOptimizer:
             if not other_emp_ids:
                 continue
             max_concurrent = group.get("max_concurrent", 1)
+            min_gap_days = int(group.get("min_gap_days", 0) or 0)
 
             other_slots = [
                 s for s in self._active_slots
                 if s.employee_id in other_emp_ids
                 and s.status in ("APPROVED", "REQUESTED")
-                and s.start_date <= end
-                and s.end_date >= start
+                and s.start_date <= (end + timedelta(days=min_gap_days))
+                and s.end_date >= (start - timedelta(days=min_gap_days))
                 and (exclude_slot_id is None or s.id != exclude_slot_id)
             ]
             if not other_slots:
@@ -306,9 +399,34 @@ class VacationOptimizer:
                         "group_name": group.get("name", "Группа непересечения"),
                         "conflicting_names": names,
                         "max_concurrent": max_concurrent,
+                        "min_gap_days": min_gap_days,
+                        "is_gap_violation": False,
                         "reason": group.get("reason", "Запрет одновременного отпуска"),
                     }
                 cur_day += timedelta(days=1)
+
+            # Check mandatory buffer gap (e.g., 7 days between vacations in group)
+            if min_gap_days > 0:
+                gap_conflicts = [
+                    s for s in other_slots
+                    if (s.start_date - timedelta(days=min_gap_days)) <= end
+                    and (s.end_date + timedelta(days=min_gap_days)) >= start
+                ]
+                if gap_conflicts:
+                    conflicting_emp_ids = {s.employee_id for s in gap_conflicts}
+                    names = [
+                        self._active_employees[eid].full_name
+                        for eid in conflicting_emp_ids
+                        if eid in self._active_employees
+                    ]
+                    return {
+                        "group_name": group.get("name", "Группа непересечения"),
+                        "conflicting_names": names,
+                        "max_concurrent": max_concurrent,
+                        "min_gap_days": min_gap_days,
+                        "is_gap_violation": True,
+                        "reason": group.get("reason", f"Обязательный перерыв {min_gap_days} дн. между отпусками"),
+                    }
 
         return None
 
@@ -356,6 +474,9 @@ class VacationOptimizer:
         return None
 
     def _get_first_conflict_reason(self, employee: Employee, start: date, end: date) -> Optional[str]:
+        limit_err = self.check_single_slot_limits_violation(employee, start, end)
+        if limit_err:
+            return limit_err
         b_name = self._check_blackout_intersection(start, end)
         if b_name:
             return f"Попадание на блэкаут-период: «{b_name}»"
@@ -365,6 +486,11 @@ class VacationOptimizer:
             return f"Превышение лимита одновременных отпусков для смены «{employee.shift}»"
         incomp = self._check_incompatible_groups_violation(employee, start, end)
         if incomp:
+            if incomp.get("is_gap_violation") and incomp.get("min_gap_days"):
+                return (
+                    f"Между отпусками в группе «{incomp['group_name']}» ({', '.join(incomp['conflicting_names'])}) "
+                    f"должен быть перерыв минимум {incomp['min_gap_days']} дн."
+                )
             return f"Пересечение в группе «{incomp['group_name']}» ({', '.join(incomp['conflicting_names'])})"
         pair_incomp = self._check_personal_pairs_violation(employee, start, end)
         if pair_incomp:
