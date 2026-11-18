@@ -42,13 +42,18 @@
 4. **Производственные ограничения (HARD Rules в `ScheduleRule`):**
    * Квоты должностей (`max_concurrent_roles` + `JobRole.default_quota`, `0..50`): например, не более 3 швей и не более 1 закройщика/технолога одновременно.
    * Квоты смен (`max_concurrent_shifts` + `WorkShift.default_quota`, `0..50`): лимит одновременных отпусков внутри одной смены.
-   * Группы непересечения сотрудников (`incompatible_employee_groups`): взаимозаменяемые сотрудницы не могут уходить в отпуск одновременно.
+   * Группы непересечения сотрудников (`incompatible_employee_groups`): взаимозаменяемые сотрудницы (от 2 и более человек) не могут уходить в отпуск одновременно.
+   * Персональные запреты пересечения 1-на-1 (`personal_incompatible_pairs`): индивидуальные пары напарниц/сменщиц («Кто с кем не может пересекаться»), которым запрещено пересекаться по датам отпуска.
    * Блэкаут-периоды (`blackout_periods`): пик пошива школьной формы (15–31 августа), сезонные коллекции, годовая инвентаризация.
 5. **Безопасность API, 152-ФЗ, бота MAX и Mini App:**
    * **Административная защита (`require_admin` в `backend/auth.py`):** все эндпоинты дашборда, включая чтение (сотрудники, цеха, роли, смены, слоты, правила, админы, выгрузки, веб-симулятор чата), кроме `/api/miniapp/*`, `/api/chat/webhook*` и `/api/auth/verify_phone`, проверяют заголовок `X-Admin-Token` или `?token=` против `ADMIN_API_KEY` (`secrets.compare_digest`). На фронтенде используется обертка `adminFetch()`.
    * **Мини-приложение MAX (`/vacation/miniapp` и `/api/miniapp/*`):**
-     * Отдает ролевой интерфейс с 3 вкладками: `👤 Мой отпуск` (баланс, согласие 152-ФЗ, выбор дат с проверкой через CSP-солвер и черновик), `📅 Отпуска всех` (общий график предприятия без телефонов по 152-ФЗ) и `👑 Руководитель` (для `BotAdmin` или по `X-Admin-Token`: KPI, согласование/отклонение заявок в 1 клик с push-уведомлением в MAX, пакетное авто-согласование и доступ к боту).
-     * Маршруты `/miniapp` и `/miniapp/` обязаны поддерживать методы `GET` и `HEAD`, отдавать `Content-Security-Policy: frame-ancestors *` и **не** отдавать `X-Frame-Options` (чтобы открываться внутри Electron/WebView клиентов MAX), тогда как все остальные маршруты отдают `X-Frame-Options: SAMEORIGIN`.
+     * Отдает упрощенный ролевой интерфейс:
+       * `👤 Мой отпуск` (баланс с учетом уже утвержденных `APPROVED` слотов, памятка персональных напарниц `my_restrictions`, согласие 152-ФЗ, выбор дат с мгновенной предпроверкой через CSP-солвер, применение альтернатив в 1 клик `/api/miniapp/draft/select-alternative`, прямое редактирование периодов в черновике `✏️ Изменить` `/api/miniapp/draft/update` и возврат еще не утвержденных заявок обратно в черновик `✏️ Изменить даты` `/api/miniapp/slots/recall`).
+       * `📅 Кто когда в отпуске` (общий график предприятия без телефонов по 152-ФЗ с быстрым переключателем `Моя смена` / `Мой цех` / `Вся фабрика`).
+       * `👑 Руководитель` (для `BotAdmin` или по `X-Admin-Token`: KPI, показ причины конфликта, согласование/отклонение заявок в 1 клик с push-уведомлением в MAX, пакетное авто-согласование и сворачиваемый блок управления доступом к боту).
+     * Маршруты `/miniapp` и `/miniapp/` обязаны поддерживать методы `GET` и `HEAD`, отдавать `Content-Security-Policy: frame-ancestors *` (с `proxy_hide_header Content-Security-Policy` в Nginx) и **не** отдавать `X-Frame-Options` (чтобы открываться внутри Electron/WebView клиентов MAX), тогда как все остальные маршруты отдают `X-Frame-Options: SAMEORIGIN`.
+     * **Запрет внешних зарубежных CDN для фронтенда:** библиотеки **Vue 3**, **Tailwind CSS** и **Lucide Icons** обязательно раздаются локально из `frontend/vendor/` (`/vacation/static/vendor/...`), чтобы исключить блокировки `unpkg.com` в браузерах и WebView на территории РФ.
    * **Защита вебхука MAX (`/api/chat/webhook`):**
      * Проверка секрета `WEBHOOK_SECRET` (заголовок `X-Max-Bot-Token` или `?token=`).
      * In-memory Sliding Window Rate Limiter (`check_rate_limit`): не более **10 запросов в минуту** на `user_id` или IP (`X-Forwarded-For` / `X-Real-IP`).
@@ -64,35 +69,36 @@
 ---
 
 ## 📁 Карта кодовой базы (Codebase Map)
-Подробная схема таблиц БД, все 40 REST API эндпоинтов и навигация по номерам строк находятся в [ARCHITECTURE_INDEX.md](file:///d:/PyCharm_Projects/Отпуск/ARCHITECTURE_INDEX.md).
+Подробная схема таблиц БД, все 46 REST API эндпоинтов и навигация по номерам строк находятся в [ARCHITECTURE_INDEX.md](file:///d:/PyCharm_Projects/Отпуск/ARCHITECTURE_INDEX.md).
 
 * `backend/`
-  * `main.py` (101 стр.) — FastAPI `app`, middleware заголовков безопасности (`frame-ancestors *` для `/miniapp`, `SAMEORIGIN` для остальных), `CORS_ORIGINS`, скрытие `/docs` в `production`, подключение 11 роутеров и статики `frontend/`.
+  * `main.py` (102 стр.) — FastAPI `app`, middleware заголовков безопасности (`frame-ancestors *` для `/miniapp`, `SAMEORIGIN` для остальных), `CORS_ORIGINS`, скрытие `/docs` в `production`, подключение 11 роутеров и статики `frontend/`.
   * `auth.py` (33 стр.) — Зависимость `require_admin` (`X-Admin-Token` / `?token=` против `ADMIN_API_KEY`).
   * `database.py` (73 стр.) — SQLite `vacations.db` (режим `WAL`, `synchronous=NORMAL`), `get_db()`, автомиграции `migrate_db()`.
   * `models.py` (144 стр.) — 9 ORM-моделей: `Department`, `JobRole`, `WorkShift`, `Employee` (вкл. `consent_152fz`), `BotAdmin`, `EmployeeDraft`, `ScheduleRule`, `VacationSlot`, `ChatMessage`.
-  * `schemas.py` (344 стр.) — Pydantic v2 схемы с граничными валидаторами (`Field`, `field_validator`).
-  * `seed_data.py` (212 стр.) — `ensure_minimal_rules_if_empty()` (для продакшена) и `seed_database()` (для локального демо).
-  * `google_sheets_importer.py` (312 стр.) — Импорт из Google Sheets (`GOOGLE_SPREADSHEET_ID`) и обезличенный `FALLBACK_WORKERS`.
-  * `solver/optimizer.py` (478 стр.) — `VacationOptimizer`: in-memory предзагрузка, проверка ограничений, Топ-3 альтернативы, пакетное согласование.
+  * `schemas.py` (362 стр.) — Pydantic v2 схемы с граничными валидаторами (`Field`, `field_validator`), включая `IncompatibleGroup` и `IncompatiblePair`.
+  * `seed_data.py` (315 стр.) — `ensure_minimal_rules_if_empty()` (для продакшена), `ensure_default_rules()` и `seed_database()` (для локального демо).
+  * `google_sheets_importer.py` (315 стр.) — Импорт из Google Sheets (`GOOGLE_SPREADSHEET_ID`) и обезличенный `FALLBACK_WORKERS`.
+  * `solver/optimizer.py` (533 стр.) — `VacationOptimizer`: in-memory предзагрузка, проверка ТК РФ, блэкаутов, квот ролей/смен, групп и персональных пар непересечения (`_check_personal_pairs_violation`), Топ-3 альтернативы, пакетное согласование.
   * `solver/nlp_date_parser.py` (196 стр.) — Детерминированный парсер русских дат, месяцев, длительностей и интентов.
-  * `agents/intake_agent.py` (568 стр.) — `IntakeAgent`: диалог 152-ФЗ, верификация телефона, накопительный черновик `EmployeeDraft`, защита от самопересечений.
+  * `agents/intake_agent.py` (594 стр.) — `IntakeAgent`: диалог 152-ФЗ, верификация телефона, накопительный черновик `EmployeeDraft` с учетом уже утвержденных (`APPROVED`) слотов года, защита от самопересечений.
   * `agents/solver_agent.py` (72 стр.) — `SolverAgent`: обертка над `VacationOptimizer` и запись слотов `commit_approved_slots`.
   * `agents/manager_agent.py` (171 стр.) — `ManagerAgent`: управление правилами, штатом и сводной статистикой `get_dashboard_summary`.
-  * `services/llm_service.py` (186 стр.) — `GeminiFlashService` (`gemini-flash-lite-latest` + fallback), `sanitize_prompt_pii`, передача ключа в `x-goog-api-key`.
+  * `services/llm_service.py` (182 стр.) — `GeminiFlashService` (`gemini-flash-lite-latest` + fallback), `sanitize_prompt_pii`, передача ключа в `x-goog-api-key`.
   * `services/max_bot_client.py` (270 стр.) — `MaxBotClient`: отправка сообщений, inline-кнопок (`callback` и `link`) и запроса контакта в MAX.
   * `api/` — Роутеры FastAPI:
-    * `auth_routes.py` (19 стр.), `employee_routes.py` (152 стр.), `department_routes.py` (94 стр.), `role_routes.py` (151 стр.), `shift_routes.py` (65 стр.), `vacation_routes.py` (122 стр.), `rule_routes.py` (177 стр.), `admin_routes.py` (72 стр.), `chat_routes.py` (770 стр.), `miniapp_routes.py` (420 стр.), `export_routes.py` (150 стр.).
-* `frontend/` (SPA без сборщика: Vue 3 Global CDN + Tailwind CSS CDN + Lucide Icons)
-  * `index.html` (426 стр.) и `app.js` (563 стр.) — Основной веб-дашборд руководителя.
-  * `miniapp.html` (490 стр.) и `miniapp.js` (473 стр.) — Ролевое мини-приложение MAX (`Мой отпуск`, `Отпуска всех`, `Руководитель`).
-  * `components/` — Модули вкладок дашборда: `gantt-view.js`, `roster-view.js`, `dept-roles-view.js`, `rules-view.js`, `chat-view.js`.
+    * `auth_routes.py` (19 стр.), `employee_routes.py` (152 стр.), `department_routes.py` (95 стр.), `role_routes.py` (152 стр.), `shift_routes.py` (66 стр.), `vacation_routes.py` (122 стр.), `rule_routes.py` (273 стр.), `admin_routes.py` (72 стр.), `chat_routes.py` (792 стр.), `miniapp_routes.py` (816 стр.), `export_routes.py` (150 стр.).
+* `frontend/` (SPA без сборщика: локальные библиотеки в `frontend/vendor/` — Vue 3 + Tailwind CSS + Lucide Icons)
+  * `index.html` (429 стр.) и `app.js` (604 стр.) — Основной веб-дашборд руководителя.
+  * `miniapp.html` (581 стр.) и `miniapp.js` (652 стр.) — Ролевое мини-приложение MAX (`Мой отпуск`, `Кто когда в отпуске`, `Руководитель`) с редактированием черновика и возвратом заявок на правку.
+  * `vendor/` — Локальные копии `vue.global.prod.js`, `tailwind.js`, `lucide.min.js` (защита от блокировок внешних CDN в РФ).
+  * `components/` — Модули вкладок дашборда: `gantt-view.js` (259 стр.), `roster-view.js` (142 стр.), `dept-roles-view.js` (448 стр.), `rules-view.js` (479 стр.), `chat-view.js` (244 стр.).
 * `deploy/` — `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `nginx_max.conf`, `deploy_vps.sh`.
-* `tests/` — **144 теста** pytest в 12 файлах.
+* `tests/` — **150+ тестов** pytest в 13 файлах.
 
 ---
 
-## 🪙 Протокол экономии токенов для ИИ-агентов (Token Optimization Protocol)
+## 🪙 Протокол экономии токенов и поддержания актуальности документации
 1. **Точечное чтение (`read_file` с `StartLine` и `EndLine`):**
    * Перед чтением крупных файлов (`chat_routes.py`, `miniapp_routes.py`, `intake_agent.py`, `app.js`, `miniapp.js`, `optimizer.py`, `schemas.py`) загляните в [ARCHITECTURE_INDEX.md](file:///d:/PyCharm_Projects/Отпуск/ARCHITECTURE_INDEX.md) и читайте только нужный диапазон строк.
 2. **Запрет на сканирование `.venv` в терминале:**
@@ -103,3 +109,8 @@
    * Новые колонки SQLite обязательно добавляются как в `backend/models.py`, так и в `migrate_db()` в `backend/database.py`.
    * Не оставляйте в рабочей директории неотслеживаемые `.exe`, `.db`, `.db-wal`, `.db-shm` или `.env` файлы (проверяется автотестом `test_ac62_workspace_cleanliness_git_status`).
    * В скрипте `deploy/deploy_vps.sh` всегда сохраняйте окончания строк `LF` (`\n`).
+5. **Обязательное обновление правил при важных изменениях (Self-Updating Documentation Rule):**
+   * **При любых важных изменениях архитектуры, бизнес-правил, схемы БД, списка эндпоинтов API, структуры Mini App или крупных файлов** ИИ-агент **обязан** в рамках той же задачи синхронно актуализировать:
+     1. `AGENTS.md` (бизнес-правила, ограничения безопасности и карту кодовой базы).
+     2. `ARCHITECTURE_INDEX.md` (индекс строк `StartLine`–`EndLine` по крупным файлам, схему таблиц БД и таблицу всех REST API маршрутов).
+     3. `.agents/skills/add-feature-playbook/SKILL.md` (если изменились рецепты добавления правил, полей или UI-компонентов).

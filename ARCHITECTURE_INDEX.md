@@ -8,57 +8,57 @@
 
 Чтобы экономить токены, используйте `read_file` с указанными диапазонами `StartLine` и `EndLine`:
 
-### [backend/api/chat_routes.py](file:///d:/PyCharm_Projects/Отпуск/backend/api/chat_routes.py) (734 строки)
-* `L20–L68` — In-Memory Sliding Window Rate Limiter (`check_rate_limit`, `clear_rate_limits`, `extract_client_ip` с поддержкой `X-Forwarded-For` / `X-Real-IP`).
-* `L70–L116` — `mask_phone` (маскирование ПДн в логах), `normalize_phone_number`, `extract_phone_and_name_from_vcard`.
-* `L118–L219` — `extract_contact_from_webhook`, `extract_phone_from_webhook`: извлечение `(phone, contact_user_id)` из нативных контактов и вложений MAX / TamTam.
-* `L224–L283` — Веб-симулятор: `POST /api/chat/message`, `GET /api/chat/history/{employee_id}` (с авто-приветствием), `POST /api/chat/reset/{employee_id}` (сброс истории и черновика).
-* `L286–L428` — `extract_chat_id_from_webhook`, `extract_user_id_from_webhook` (защита от эхо-петель бота).
-* `L430–L513` — `max_messenger_webhook` (часть 1): проверка `WEBHOOK_SECRET` (`X-Max-Bot-Token` / `?token=`), rate-limiting (`429`), извлечение `callback_data`, `text`, `phone`, `contact_user_id`.
-* `L514–L608` — `max_messenger_webhook` (часть 2): **Anti-Spoofing проверка контакта** (`contact_user_id == payload.user_id`), привязка `Employee` / `BotAdmin` только при верифицированном контакте.
-* `L609–L734` — `max_messenger_webhook` (часть 3): команда `/admin`, запрос контакта у неавторизованных пользователей, проверка `bot_access`, вызов `agent.process_message` в `run_in_threadpool`, формирование кнопок (152-ФЗ, альтернативы, подтверждение).
+### [backend/api/chat_routes.py](file:///d:/PyCharm_Projects/Отпуск/backend/api/chat_routes.py) (792 строки)
+* `L20–L79` — In-Memory Sliding Window Rate Limiter (`check_rate_limit`, `clear_rate_limits`, `extract_client_ip`) и генератор персональных ссылок `build_personal_miniapp_url`.
+* `L81–L127` — `mask_phone` (маскирование ПДн в логах), `normalize_phone_number`, `extract_phone_and_name_from_vcard`.
+* `L129–L230` — `extract_contact_from_webhook`, `extract_phone_from_webhook`: извлечение `(phone, contact_user_id)` из нативных контактов и вложений MAX / TamTam.
+* `L235–L294` — Веб-симулятор: `POST /api/chat/message`, `GET /api/chat/history/{employee_id}` (с авто-приветствием), `POST /api/chat/reset/{employee_id}` (сброс истории и черновика).
+* `L297–L439` — `extract_chat_id_from_webhook`, `extract_user_id_from_webhook` (защита от эхо-петель бота).
+* `L441–L524` — `max_messenger_webhook` (часть 1): проверка `WEBHOOK_SECRET` (`X-Max-Bot-Token` / `?token=`), rate-limiting (`429`), извлечение `callback_data`, `text`, `phone`, `contact_user_id`.
+* `L525–L654` — `max_messenger_webhook` (часть 2): **Anti-Spoofing проверка контакта** (`contact_user_id == payload.user_id`), привязка `Employee` / `BotAdmin` только при верифицированном контакте и выдача персональной кнопки `🌐 Открыть мой график отпусков`.
+* `L655–L792` — `max_messenger_webhook` (часть 3): команда `/admin`, запрос контакта у неавторизованных пользователей, проверка `bot_access`, вызов `agent.process_message` в `run_in_threadpool`, формирование кнопок (152-ФЗ, альтернативы, подтверждение, прямая ссылка на Mini App).
 
-### [backend/agents/intake_agent.py](file:///d:/PyCharm_Projects/Отпуск/backend/agents/intake_agent.py) (568 строк)
+### [backend/agents/intake_agent.py](file:///d:/PyCharm_Projects/Отпуск/backend/agents/intake_agent.py) (594 строки)
 * `L29–L42` — `_get_or_create_draft`: управление накопительным черновиком `EmployeeDraft`.
 * `L43–L155` — `verify_employee_by_phone` и `_extract_first_name`: авторизация по номеру телефона, проверка `bot_access` (`APPROVED`, `PENDING`, `BLOCKED`), привязка `max_user_id`.
 * `L156–L240` — `process_message` (часть 1): запись сообщения пользователя и **диалог согласия 152-ФЗ** (`consent_152fz`, кнопки `✅ Согласна` / `❌ Отказаться`).
-* `L241–L357` — `process_message` (часть 2): сброс черновика (`check_reset_intent`), подтверждение заявки (`AWAITING_CONFIRMATION` -> `commit_approved_slots`), выбор альтернативы (`1`, `2`, `3`), приветствие `/start`.
-* `L358–L466` — `process_message` (часть 3): гибридный парсинг дат (`llm_service.extract_dates_with_context`), дедупликация, замена неполного черновика при отправке сразу 36 дней, проверка самопересечений слотов, накопление и проверка перебора лимита.
-* `L467–L568` — `process_message` (часть 4): вызов CSP-солвера при наборе ровно 36 дней, формирование превью (`VALID`), ошибок ТК РФ (`INVALID_TK`) или Топ-3 альтернатив (`CONFLICT`), метод `_reply`.
+* `L241–L358` — `process_message` (часть 2): сброс черновика (`check_reset_intent`), подтверждение заявки (`AWAITING_CONFIRMATION` -> `commit_approved_slots`), выбор альтернативы (`1`, `2`, `3`), приветствие `/start` / `график` / `меню`.
+* `L359–L491` — `process_message` (часть 3): учет уже утвержденных (`APPROVED`) слотов сотрудника за целевой год, гибридный парсинг дат (`llm_service.extract_dates_with_context`), дедупликация, проверка самопересечений слотов, накопление и проверка перебора лимита.
+* `L492–L594` — `process_message` (часть 4): вызов CSP-солвера при наборе ровно 36 дней, формирование превью (`VALID`), ошибок ТК РФ (`INVALID_TK`) или Топ-3 альтернатив (`CONFLICT`), метод `_reply`.
 
-### [backend/solver/optimizer.py](file:///d:/PyCharm_Projects/Отпуск/backend/solver/optimizer.py) (478 строк)
+### [backend/solver/optimizer.py](file:///d:/PyCharm_Projects/Отпуск/backend/solver/optimizer.py) (533 строки)
 * `L10–L32` — `VacationOptimizer.__init__` и `_load_rules()`: предзагрузка правил, квот ролей, квот смен, активных сотрудников и слотов в память (защита от N+1 запросов).
-* `L33–L151` — `validate_and_check_slots`: проверка ТК РФ ($\ge 14$ дн.), нормы дней (36 дн.), блэкаутов, квот ролей, квот смен и групп непересечения.
-* `L153–L304` — Методы проверок: `_check_blackout_intersection`, `_get_role_quota`, `_check_role_quota_violation`, `_get_shift_quota`, `_check_shift_quota_violation`, `_get_incompatible_groups`, `_check_incompatible_groups_violation`.
-* `L306–L339` — `_get_first_conflict_reason`, `is_slot_valid`, `_find_candidate_slot`.
-* `L341–L423` — `_generate_top3_alternatives`: 3 детерминированные стратегии подбора свободных дат.
-* `L425–L478` — `batch_optimize_all_pending`: пакетное согласование заявок с приоритетом по стажу (`seniority_years`).
+* `L33–L160` — `validate_and_check_slots`: проверка ТК РФ ($\ge 14$ дн.), нормы дней (36 дн.), блэкаутов, квот ролей, квот смен, групп непересечения и персональных пар (`personal_incompatible_pairs`).
+* `L162–L355` — Методы проверок: `_check_blackout_intersection`, `_get_role_quota`, `_check_role_quota_violation`, `_get_shift_quota`, `_check_shift_quota_violation`, `_get_incompatible_groups`, `_check_incompatible_groups_violation`, `_get_personal_pairs`, `_check_personal_pairs_violation`.
+* `L357–L394` — `_get_first_conflict_reason`, `is_slot_valid`, `_find_candidate_slot`.
+* `L396–L478` — `_generate_top3_alternatives`: 3 детерминированные стратегии подбора свободных дат.
+* `L480–L533` — `batch_optimize_all_pending`: пакетное согласование заявок с приоритетом по стажу (`seniority_years`).
 
-### [frontend/app.js](file:///d:/PyCharm_Projects/Отпуск/frontend/app.js) (563 строки)
-* `L11–L61` — Реактивные состояния данных, фильтров, чата и модальных окон.
-* `L62–L144` — Авторизация администратора (`adminToken`, `saveAdminToken`, `clearAdminToken`, `openAdminModal`, `adminFetch`) и скачивание отчетов `downloadExport(format)`.
-* `L146–L219` — `computed`-свойства и `fetchAllData()` (параллельная загрузка 9 эндпоинтов).
-* `L221–L295` — Методы чата (`loadChatHistory`, `openChatFor`, `sendMessage`, `chooseAlternative`, `confirmDraftSubmission`, `clearChat`).
-* `L297–L401` — Управление слотами, пакетное согласование (`runBatchApprove`), CRUD сотрудников, синхронизация Google Таблицы (`syncGoogleSheets`), переключение `toggleBotAccess`.
-* `L403–L563` — Сохранение правил (`saveRoleQuotas`, `saveShiftQuotas`, `addBlackout`, `addIncompatibleGroup`), наблюдатели `watch`, `onMounted` (опрос статистики каждые 30 сек при активной вкладке) и экспорт в шаблон.
+### [frontend/app.js](file:///d:/PyCharm_Projects/Отпуск/frontend/app.js) (604 строки)
+* `L11–L62` — Реактивные состояния данных, фильтров, чата, правил (`incompatibleGroups`, `incompatiblePairs`) и модальных окон.
+* `L63–L152` — Авторизация администратора (`adminToken`, `saveAdminToken`, `clearAdminToken`, `openAdminModal`, `adminFetch`) и скачивание отчетов `downloadExport(format)`.
+* `L154–L228` — `computed`-свойства и `fetchAllData()` (параллельная загрузка 10 эндпоинтов).
+* `L230–L308` — Методы чата (`loadChatHistory`, `openChatFor`, `sendMessage`, `chooseAlternative`, `confirmDraftSubmission`, `clearChat`).
+* `L310–L412` — Управление слотами, пакетное согласование (`runBatchApprove`), CRUD сотрудников, синхронизация Google Таблицы (`syncGoogleSheets`), переключение `toggleBotAccess`.
+* `L414–L604` — Сохранение правил (`saveRoleQuotas`, `saveShiftQuotas`, `addBlackout`, `addIncompatibleGroup`, `addIncompatiblePair`, `deleteIncompatiblePair`), наблюдатели `watch`, `onMounted` и экспорт в шаблон.
 
-### [backend/schemas.py](file:///d:/PyCharm_Projects/Отпуск/backend/schemas.py) (344 строки)
-* `L6–L100` — Схемы `Department`, `JobRole` (`default_quota: 0..50`), `WorkShift` (`default_quota: 0..50`), `IncompatibleGroup`.
-* `L102–L177` — Схемы `Employee` (`total_vacation_days: 1..120`, `consent_152fz: bool`) и `BotAdmin`.
-* `L179–L258` — Схемы `DateSlot`, `VacationSlot`, `ScheduleRule` (валидатор `window_search_days: 1..90`).
-* `L260–L344` — Схемы инструментов агентов (`VerifyPhone`, `OptimizeVacation`, `UpdateRulesAndRoster`) и чата (`ChatMessageIn` с `max_length=500`, `ChatMessageOut`, `MaxWebhookPayload`).
+### [backend/schemas.py](file:///d:/PyCharm_Projects/Отпуск/backend/schemas.py) (362 строки)
+* `L6–L118` — Схемы `Department`, `JobRole` (`default_quota: 0..50`), `WorkShift` (`default_quota: 0..50`), `IncompatibleGroup`, `IncompatiblePair`.
+* `L120–L195` — Схемы `Employee` (`total_vacation_days: 1..120`, `consent_152fz: bool`) и `BotAdmin`.
+* `L197–L276` — Схемы `DateSlot`, `VacationSlot`, `ScheduleRule` (валидатор `window_search_days: 1..90`).
+* `L278–L362` — Схемы инструментов агентов (`VerifyPhone`, `OptimizeVacation`, `UpdateRulesAndRoster`) и чата (`ChatMessageIn` с `max_length=500`, `ChatMessageOut`, `MaxWebhookPayload`).
 
-### [backend/api/miniapp_routes.py](file:///d:/PyCharm_Projects/Отпуск/backend/api/miniapp_routes.py) (420 строк)
-* `L22–L55` — Pydantic-модели для Mini App (`MiniAppConsentIn`, `MiniAppDraftAddIn`, `MiniAppDraftRemoveIn`, `MiniAppSubmitDraftIn`, `MiniAppAdminSlotActionIn`, `MiniAppAdminBatchApproveIn`, `MiniAppAdminAccessIn`).
-* `L57–L261` — `_check_is_admin` и `GET /api/miniapp/context`: получение контекста сотрудника, черновика, блэкаутов, общего графика предприятия (`company_schedule` без телефонов) и секции руководителя (`admin`).
-* `L264–L341` — Действия сотрудника: `POST /api/miniapp/consent`, `POST /api/miniapp/draft/add` (проверка через `VacationOptimizer` + Топ-3 альтернативы), `POST /api/miniapp/draft/remove`, `POST /api/miniapp/draft/submit`.
-* `L344–L420` — Действия администратора: `POST /api/miniapp/admin/slot-action` (`APPROVE`/`REJECT` + уведомление в MAX), `POST /api/miniapp/admin/batch-approve`, `POST /api/miniapp/admin/bot-access`.
+### [backend/api/miniapp_routes.py](file:///d:/PyCharm_Projects/Отпуск/backend/api/miniapp_routes.py) (816 строк)
+* `L20–L74` — Pydantic-модели для Mini App (`MiniAppConsentIn`, `MiniAppAddSlotIn`, `MiniAppSelectAlternativeIn`, `MiniAppUpdateDraftSlotIn`, `MiniAppRecallSlotsIn`, `MiniAppRemoveDraftSlotIn`, `MiniAppSubmitDraftIn`, `MiniAppAdminSlotActionIn`, `MiniAppAdminBatchIn`, `MiniAppAdminAccessIn`).
+* `L77–L352` — `_check_is_admin` и `GET /api/miniapp/context`: получение контекста сотрудника, черновика, персональных ограничений с напарницами (`my_restrictions`), блэкаутов, общего графика предприятия (`company_schedule` без телефонов) и секции руководителя (`admin`).
+* `L355–L734` — Действия сотрудника: `POST /api/miniapp/consent`, `POST /api/miniapp/draft/add` (мгновенная предпроверка слота через `VacationOptimizer` + Топ-3 свободных окна), `POST /api/miniapp/draft/select-alternative`, `POST /api/miniapp/draft/update` (редактирование периода в черновике на месте), `POST /api/miniapp/slots/recall` (возврат еще не утвержденных заявок обратно в черновик для правки), `POST /api/miniapp/draft/remove`, `POST /api/miniapp/draft/submit`.
+* `L737–L816` — Действия администратора: `POST /api/miniapp/admin/slot-action` (`APPROVE`/`REJECT` + уведомление в MAX), `POST /api/miniapp/admin/batch-approve`, `POST /api/miniapp/admin/bot-access`.
 
-### [frontend/miniapp.js](file:///d:/PyCharm_Projects/Отпуск/frontend/miniapp.js) (473 строки)
+### [frontend/miniapp.js](file:///d:/PyCharm_Projects/Отпуск/frontend/miniapp.js) (652 строки)
 * `L5–L64` — `detectMaxUserId()`: определение `max_user_id` из URL, `window.WebApp.initDataUnsafe.user`, `window.Telegram.WebApp` или `localStorage`.
-* `L66–L192` — Состояния Vue 3, `loadContext()`, переключение года (`changeYear`), автовыбор активного года отпусков.
-* `L194–L344` — Логика вкладки «Мой отпуск» (`applyDurationPreset`, `acceptConsent`, `addPeriodToDraft`, `selectAlternative`, `removeDraftSlot`, `submitDraft`).
-* `L346–L473` — Фильтрация общего графика (`filteredCompanySchedule`) и действия руководителя (`handleSlotAction`, `runBatchApprove`, `updateBotAccess`).
+* `L66–L230` — Состояния Vue 3, `loadContext()`, переключение года (`changeYear`), автовыбор активного года отпусков и расчет доступного остатка (`availableDaysForCurrentEdit`).
+* `L232–L455` — Логика вкладки «Мой отпуск» (`applyDurationPreset`, `startEditDraftSlot`, `cancelEditDraftSlot`, `savePeriodToDraft`, `selectAlternative`, `removeDraftSlot`, `recallSubmittedSlots`, `submitDraft`).
+* `L457–L652` — Фильтрация общего графика (`scheduleScope`: `my_shift` / `my_dept` / `all`, `filteredCompanySchedule`) и действия руководителя (`handleSlotAction`, `runBatchApprove`, `updateBotAccess`).
 
 ---
 
@@ -156,7 +156,7 @@
 
 ---
 
-## 3. Полная карта REST API эндпоинтов (40 маршрутов)
+## 3. Полная карта REST API эндпоинтов (46 маршрутов)
 
 Эндпоинты с пометкой 🔒 требуют `Depends(require_admin)` (заголовок `X-Admin-Token` или `?token=` при установленном `ADMIN_API_KEY`).
 
@@ -211,9 +211,12 @@
 | `GET` | `/api/export/stats` | Публ. | `export_routes.py` | Сводная KPI-статистика для шапки дашборда |
 | `GET` | `/api/export/csv` | 🔒 Admin | `export_routes.py` | Выгрузка графика в CSV (`utf-8-sig`, санитизация формул) |
 | `GET` | `/api/export/excel` | 🔒 Admin | `export_routes.py` | Выгрузка формы Т-7 в Excel (`.xlsx` через `openpyxl`, санитизация формул) |
-| `GET` | `/api/miniapp/context` | Публ. (UID) | `miniapp_routes.py` | Контекст Mini App: баланс сотрудника, черновик, график всех отпусков и панель админа |
+| `GET` | `/api/miniapp/context` | Публ. (UID) | `miniapp_routes.py` | Контекст Mini App: баланс сотрудника, черновик, памятка напарниц `my_restrictions`, график всех отпусков и панель админа |
 | `POST` | `/api/miniapp/consent` | Публ. (UID) | `miniapp_routes.py` | Подтверждение согласия 152-ФЗ в Mini App |
-| `POST` | `/api/miniapp/draft/add` | Публ. (UID) | `miniapp_routes.py` | Проверка дат через CSP-солвер и добавление периода в черновик |
+| `POST` | `/api/miniapp/draft/add` | Публ. (UID) | `miniapp_routes.py` | Мгновенная предпроверка дат через CSP-солвер и добавление периода в черновик |
+| `POST` | `/api/miniapp/draft/select-alternative` | Публ. (UID) | `miniapp_routes.py` | Применение выбранного свободного окна от CSP-солвера в черновик в 1 клик |
+| `POST` | `/api/miniapp/draft/update` | Публ. (UID) | `miniapp_routes.py` | Прямое редактирование дат выбранного периода в черновике на месте |
+| `POST` | `/api/miniapp/slots/recall` | Публ. (UID) | `miniapp_routes.py` | Возврат отправленных (но еще не утвержденных) периодов обратно в черновик для редактирования |
 | `POST` | `/api/miniapp/draft/remove` | Публ. (UID) | `miniapp_routes.py` | Удаление периода или очистка черновика |
 | `POST` | `/api/miniapp/draft/submit` | Публ. (UID) | `miniapp_routes.py` | Отправка черновика руководителю на согласование + уведомление в MAX |
 | `POST` | `/api/miniapp/admin/slot-action` | 👑 BotAdmin | `miniapp_routes.py` | Утверждение (`APPROVE`) или отклонение (`REJECT`) слота руководителем |
